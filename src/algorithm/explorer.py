@@ -1,47 +1,41 @@
 """SCOUT submission for EDTH 01-ats: 3D Graph Exploration & Surveillance.
 
-Implements a centralized multi-UAV Explorer that builds a persistent map from
-depth-limited observations, plans shortest paths on the discovered graph, and
-coordinates three agents through explore and surveil phases.
+Frontier-based exploration with greedy multi-agent coordination and a
+pre-planned surveillance routing phase. Uses Euclidean distance for frontier
+selection (fast) and Dijkstra only for the chosen target.
 
-Usage with the challenge evaluator:
+Usage:
     cd challenge/graph_explo
     uv run run_eval.py --submission ../../src/algorithm/explorer.py \
         --graphs graphs/train --quiet
 
-Only stdlib + networkx are used so this file is a valid single-file submission.
+Only stdlib + networkx are used.
 """
 
 from __future__ import annotations
 
-import heapq
 import math
 import random
-from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
-# The evaluator injects the parent directory so the Observation import works
-# when this file is loaded as a submission. Guard against standalone import.
 try:
     from exploration_challenge.observation import Observation
-except ImportError:  # pragma: no cover - fallback for local dev outside eval
+except ImportError:  # pragma: no cover
     Observation = object  # type: ignore
 
 
 class _Map:
-    """Persistent map built from merging all UAV observations."""
+    """Persistent map built from merging UAV observations."""
 
     def __init__(self) -> None:
         self.graph = nx.Graph()
-        self.observed: Set[int] = set()
         self.visited: Set[int] = set()
         self.positions: Dict[int, Tuple[float, float, float]] = {}
 
     def merge(self, observations: List[Observation]) -> None:
         for obs in observations:
-            self.observed.update(n.id for n in obs.nodes)
             self.visited.update(obs.visited)
             self.visited.add(obs.position)
             self.positions[obs.position] = obs.position_xyz
@@ -53,14 +47,7 @@ class _Map:
                 if not self.graph.has_edge(e.u, e.v):
                     self.graph.add_edge(e.u, e.v, weight=e.cost)
 
-    def has_node(self, node_id: int) -> bool:
-        return self.graph.has_node(node_id)
-
-    def neighbors(self, node_id: int) -> List[int]:
-        return list(self.graph.neighbors(node_id))
-
     def shortest_path(self, source: int, target: int) -> List[int]:
-        """Return node path source → target on known graph, or [] if unreachable."""
         if source == target:
             return [source]
         try:
@@ -68,30 +55,25 @@ class _Map:
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return []
 
-    def path_cost(self, path: List[int]) -> float:
-        cost = 0.0
-        for u, v in zip(path, path[1:]):
-            data = self.graph.get_edge_data(u, v)
-            cost += data.get("weight", math.dist(self.positions[u], self.positions[v]))
-        return cost
-
 
 class Explorer:
-    """Centralized policy for 3 UAVs."""
+    """Centralized policy for 1-3 UAVs."""
 
-    def __init__(self) -> None:
+    def __init__(self, sensor_k: int = 4) -> None:
         self.map = _Map()
         self.rng = random.Random(0)
+        self.sensor_k = sensor_k
         self.n_agents = 3
         self.positions: List[int] = []
-        self.targets: List[Optional[int]] = [None, None, None]
-        self.paths: List[List[int]] = [[], [], []]
-        # Coverage tracking
+        self.targets: List[Optional[int]] = [None] * self.n_agents
+        self.paths: List[List[int]] = [[] for _ in range(self.n_agents)]
         self.explore_seen: Set[int] = set()
         self.surveil_seen: Set[int] = set()
-        # For tie-breaking and stall detection
         self.last_positions: Optional[List[int]] = None
         self.stall_count = 0
+        self._path_cache: Dict[Tuple[int, int], List[int]] = {}
+        self._surveil_routes: Optional[List[List[int]]] = None
+        self._route_idx: List[int] = [0, 0, 0]
 
     def reset(
         self,
@@ -100,15 +82,21 @@ class Explorer:
         seed: Optional[int] = None,
     ) -> None:
         self.rng = random.Random(seed)
+        self.n_agents = len(starts)
         self.map = _Map()
         self.map.merge(observations)
         self.positions = list(starts)
         self.targets = [None] * self.n_agents
         self.paths = [[] for _ in range(self.n_agents)]
-        self.explore_seen: Set[int] = set()
-        self.surveil_seen: Set[int] = set()
+        self.explore_seen = set()
+        self.surveil_seen = set()
         self.last_positions = None
         self.stall_count = 0
+        self._path_cache = {}
+        self._surveil_routes = None
+        self._route_idx = [0] * self.n_agents
+        self._explore_stagnation = 0
+        self._last_explored_count = -1
         for obs in observations:
             self.explore_seen.update(n.id for n in obs.nodes)
 
@@ -116,158 +104,217 @@ class Explorer:
         self.map.merge(observations)
         self.positions = [obs.position for obs in observations]
 
-        # Update coverage counters
         for obs in observations:
             if phase == "explore":
                 self.explore_seen.update(n.id for n in obs.nodes)
             else:
                 self.surveil_seen.update(n.id for n in obs.nodes)
 
-        # Detect stall (no movement by any UAV) and clear stuck targets
+        # Stall recovery.
         if self.last_positions == self.positions:
             self.stall_count += 1
             if self.stall_count >= 3:
                 self.targets = [None] * self.n_agents
                 self.paths = [[] for _ in range(self.n_agents)]
+                self._path_cache = {}
+                self._surveil_routes = None
         else:
             self.stall_count = 0
         self.last_positions = list(self.positions)
 
-        # Recompute targets if reached or invalid
+        # Clear reached/invalid targets.
         for i, pos in enumerate(self.positions):
-            if self.targets[i] is not None and self.targets[i] == pos:
+            if self.targets[i] == pos:
                 self.targets[i] = None
                 self.paths[i] = []
-            if self.targets[i] is not None and not self.map.has_node(self.targets[i]):
+            if self.targets[i] is not None and not self.map.graph.has_node(self.targets[i]):
                 self.targets[i] = None
                 self.paths[i] = []
 
-        # Assign new targets where needed
-        self._assign_targets(phase)
+        if phase == "explore":
+            self._assign_explore_targets()
+        else:
+            self._assign_surveil_targets()
 
-        # Plan next hops along shortest known paths
         actions: List[int] = []
-        planned_next: Dict[int, int] = {}  # node_id -> agent_id that wants to move there
+        planned_next: Dict[int, int] = {}
         for i, pos in enumerate(self.positions):
             target = self.targets[i]
             if target is None:
-                actions.append(pos)  # wait
+                actions.append(pos)
                 continue
 
             if not self.paths[i] or self.paths[i][0] != pos:
-                self.paths[i] = self.map.shortest_path(pos, target)
+                self.paths[i] = self._cached_path(pos, target)
 
-            if len(self.paths[i]) >= 2:
-                nxt = self.paths[i][1]
-            else:
-                nxt = pos
+            nxt = self.paths[i][1] if len(self.paths[i]) >= 2 else pos
 
-            # Collision: another UAV already plans to end on nxt
+            # Collision avoidance.
             if nxt in planned_next:
-                nxt = pos  # wait one tick
+                nxt = pos
             elif nxt != pos:
-                # Edge-swap check: other UAV moving opposite direction
                 other_i = planned_next.get(pos)
-                if other_i is not None:
-                    other_pos = self.positions[other_i]
-                    if other_pos == nxt:
-                        nxt = pos  # would swap edges, wait instead
+                if other_i is not None and self.positions[other_i] == nxt:
+                    nxt = pos
 
             planned_next[nxt] = i
             actions.append(nxt)
 
         return actions
 
-    def _assign_targets(self, phase: str) -> None:
-        """Assign one target per UAV without a current target."""
+    def _cached_path(self, source: int, target: int) -> List[int]:
+        key = (source, target)
+        if key not in self._path_cache:
+            self._path_cache[key] = self.map.shortest_path(source, target)
+        return self._path_cache[key]
+
+    def _euclidean(self, a: int, b: int) -> float:
+        pa = self.map.positions.get(a)
+        pb = self.map.positions.get(b)
+        if pa is None or pb is None:
+            return float("inf")
+        return math.dist(pa, pb)
+
+    def _assign_explore_targets(self) -> None:
+        """Assign nearest unvisited known node to each UAV.
+
+        If exploration progress stalls (observed fraction stops growing), switch
+        to classic frontier mode (unvisited nodes adjacent to visited nodes) to
+        push the visibility boundary outward.
+        """
         open_slots = [i for i, t in enumerate(self.targets) if t is None]
         if not open_slots:
             return
 
-        if phase == "explore":
-            candidates = self._explore_candidates()
-        else:
-            candidates = self._surveil_candidates()
-
-        if not candidates:
-            return
-
-        # Greedy assignment: for each open slot, pick the cheapest candidate
-        # that hasn't been claimed yet. Recompute costs each iteration because
-        # claiming a target changes the pool.
-        claimed: Set[int] = set()
-        for i in open_slots:
-            pos = self.positions[i]
-            best: Optional[Tuple[int, float]] = None
-            for cand in candidates:
-                if cand in claimed or cand == pos:
-                    continue
-                path = self.map.shortest_path(pos, cand)
-                if not path:
-                    continue
-                cost = self.map.path_cost(path)
-                if best is None or cost < best[1]:
-                    best = (cand, cost)
-            if best is not None:
-                self.targets[i] = best[0]
-                self.paths[i] = self.map.shortest_path(pos, best[0])
-                claimed.add(best[0])
-
-    def _explore_candidates(self) -> List[int]:
-        """Return high-value exploration targets (unvisited known frontier nodes)."""
         known = set(self.map.graph.nodes())
         if not known:
-            return []
+            return
 
-        # Priority 1: unvisited known nodes that are likely frontier (leaf-ish).
+        current_observed = len(self.explore_seen)
+        if getattr(self, "_last_explored_count", None) == current_observed:
+            self._explore_stagnation = getattr(self, "_explore_stagnation", 0) + 1
+        else:
+            self._explore_stagnation = 0
+        self._last_explored_count = current_observed
+
         unvisited = known - self.map.visited
-        if unvisited:
-            # Prefer nodes with low known degree (leads to new areas) and far
-            # from visited set (spreads agents out).
-            scored = []
-            for node in unvisited:
-                degree = self.map.graph.degree(node)
-                dist_to_visited = self._min_distance_to_set(node, self.map.visited)
-                # Score: prefer leaves and nodes away from visited area.
-                score = -degree * 10 + dist_to_visited
-                scored.append((score, node))
-            scored.sort(reverse=True)
-            return [n for _, n in scored[:50]]
+        if not unvisited:
+            unvisited = known
+        if not unvisited:
+            return
 
-        # Fallback: if everything known is visited, pick visited nodes with
-        # highest distance to visited neighbors to push observation frontier.
-        scored = []
-        for node in known:
-            dist_to_visited = self._min_distance_to_set(node, self.map.visited - {node})
-            scored.append((dist_to_visited, node))
-        scored.sort(reverse=True)
-        return [n for _, n in scored[:30]]
+        # If stagnating, prefer classic frontier nodes (unvisited neighbors of visited).
+        if self._explore_stagnation >= 20:
+            frontier: Set[int] = set()
+            for v in self.map.visited:
+                frontier.update(n for n in self.map.graph.neighbors(v) if n not in self.map.visited)
+            if frontier:
+                candidates = sorted(frontier, key=lambda n: self.map.graph.degree(n))[:300]
+            else:
+                candidates = sorted(unvisited, key=lambda n: self.map.graph.degree(n))[:300]
+        else:
+            candidates = sorted(unvisited, key=lambda n: self.map.graph.degree(n))[:300]
 
-    def _surveil_candidates(self) -> List[int]:
-        """Return nodes that still need re-observation during surveillance."""
+        # Partition candidates among agents by Euclidean proximity (Voronoi).
+        assignment: Dict[int, List[int]] = {i: [] for i in open_slots}
+        claimed: Set[int] = set(t for t in self.targets if t is not None)
+        claimed.update(self.positions)
+
+        for node in candidates:
+            if node in claimed:
+                continue
+            best_i = min(open_slots, key=lambda i: self._euclidean(self.positions[i], node))
+            assignment[best_i].append(node)
+
+        for i in open_slots:
+            pos = self.positions[i]
+            cand = assignment[i]
+            if not cand:
+                continue
+            target = min(cand, key=lambda n: self._euclidean(pos, n))
+            self.targets[i] = target
+            self.paths[i] = self._cached_path(pos, target)
+
+    def _k_hop_ball(self, source: int) -> Set[int]:
+        seen: Set[int] = {source}
+        frontier: Set[int] = {source}
+        for _ in range(self.sensor_k):
+            nxt: Set[int] = set()
+            for node in frontier:
+                nxt.update(self.map.graph.neighbors(node))
+            nxt -= seen
+            seen.update(nxt)
+            frontier = nxt
+            if not frontier:
+                break
+        return seen
+
+    def _assign_surveil_targets(self) -> None:
+        """Adaptive surveillance: each UAV targets the nearest un-surveilled node
+        in its Voronoi cell, recomputed every step."""
+        open_slots = [i for i, t in enumerate(self.targets) if t is None]
+        if not open_slots:
+            return
+
         known = set(self.map.graph.nodes())
         need = known - self.surveil_seen
         if not need:
-            return []
-        # Prefer nodes farthest from already surveilled nodes to maximize spread
-        scored = []
-        for node in need:
-            dist = self._min_distance_to_set(node, self.surveil_seen)
-            scored.append((dist, node))
-        scored.sort(reverse=True)
-        return [n for _, n in scored[:50]]
+            return
 
-    def _min_distance_to_set(self, node: int, target_set: Set[int]) -> float:
-        if node in target_set or not target_set:
-            return 0.0
-        min_dist = float("inf")
-        pos = self.map.positions.get(node)
-        for t in target_set:
-            t_pos = self.map.positions.get(t)
-            if pos and t_pos:
-                d = math.dist(pos, t_pos)
-            else:
-                d = 0.0
-            if d < min_dist:
-                min_dist = d
-        return min_dist if min_dist != float("inf") else 0.0
+        # Partition remaining need among agents by Euclidean proximity.
+        assignment: Dict[int, List[int]] = {i: [] for i in open_slots}
+        claimed: Set[int] = set(t for t in self.targets if t is not None)
+        claimed.update(self.positions)
+
+        for node in need:
+            if node in claimed:
+                continue
+            best_i = min(open_slots, key=lambda i: self._euclidean(self.positions[i], node))
+            assignment[best_i].append(node)
+
+        for i in open_slots:
+            pos = self.positions[i]
+            candidates = assignment[i]
+            if not candidates:
+                # Fallback: nearest any need.
+                candidates = [n for n in need if n != pos]
+                if not candidates:
+                    continue
+            target = min(candidates, key=lambda n: self._euclidean(pos, n))
+            self.targets[i] = target
+            self.paths[i] = self._cached_path(pos, target)
+
+    def _build_surveil_routes(self, known: Set[int]) -> List[List[int]]:
+        """Partition a sampled set of nodes among agents and build TSP routes."""
+        need = known - self.surveil_seen
+        if not need:
+            return [[] for _ in range(self.n_agents)]
+
+        # Sample nodes to use as vantage points (all if small, otherwise sample).
+        sample = list(need)
+        if len(sample) > 300:
+            self.rng.shuffle(sample)
+            sample = sample[:300]
+
+        # Partition sampled nodes among agents by start proximity (Voronoi).
+        routes: List[List[int]] = [[] for _ in range(self.n_agents)]
+        for node in sample:
+            best_i = min(range(self.n_agents), key=lambda i: self._euclidean(self.positions[i], node))
+            routes[best_i].append(node)
+
+        # Build nearest-neighbor TSP routes for each agent.
+        for i in range(self.n_agents):
+            route = routes[i]
+            if not route:
+                continue
+            ordered: List[int] = []
+            current = self.positions[i]
+            remaining = set(route)
+            while remaining:
+                nxt = min(remaining, key=lambda n: self._euclidean(current, n))
+                ordered.append(nxt)
+                remaining.remove(nxt)
+                current = nxt
+            routes[i] = ordered
+
+        return routes
