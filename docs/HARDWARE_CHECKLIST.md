@@ -8,7 +8,8 @@
 - [ ] Sony IMX500 AI Camera
 - [ ] Standard Pi Camera Module (wide angle)
 - [ ] USB robot-eyes / arm camera
-- [ ] microSD card with Raspberry Pi OS
+- [x] microSD card with Raspberry Pi OS — SanDisk Extreme PLUS 64GB A2 ✅
+- [x] SD card reader/adapter ✅
 - [ ] Laptop (MacBook)
 - [ ] Colored electrical tape (patrol path)
 - [ ] Cardboard boxes (3 sectors)
