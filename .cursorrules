@@ -1,0 +1,12 @@
+> Read AGENTS.md and CLAUDE.md before every session.
+
+# SCOUT / EDTH Munich 2026
+
+- Challenge: 01-ats 3D Graph Exploration & Surveillance
+- Only submit `src/algorithm/explorer.py` for evaluation
+- `explorer.py` may only use Python stdlib + networkx
+- Robot code runs on Raspberry Pi 5
+- Dashboard uses Streamlit, offline only
+- Mobile app / shared state is OUT OF SCOPE
+- Always run `uv run run_eval.py` after algorithm changes
+- Prefer minimal changes; cite file paths
