@@ -221,16 +221,28 @@
       const targetW = 600, targetD = 450;
       const scale = Math.min(targetW / size.x, targetD / size.y, targetD / size.z) || 1;
       const material = new THREE.PointsMaterial({
-        size: 0.8,
+        size: 3.5,
         vertexColors: true,
-        opacity: 0.9,
-        transparent: true,
+        opacity: 1.0,
+        transparent: false,
         sizeAttenuation: true
       });
       const points = new THREE.Points(geometry, material);
       points.scale.set(scale, scale, scale);
-      points.position.set(500 - center.x * scale, 0, 400 - center.z * scale);
+      // Lift the point cloud slightly above the ground plane.
+      // PLY x,y = map east/north; z = height. Three.js y is up.
+      points.position.set(500 - center.x * scale, 2, 400 - center.y * scale);
       scene.add(points);
+
+      // Red bounding box so the area is obvious.
+      const boxHelper = new THREE.BoxHelper(points, 0xFF3366);
+      scene.add(boxHelper);
+
+      // Aim camera at the point cloud.
+      const worldCenter = points.position.clone().add(center.clone().multiplyScalar(scale));
+      controls.target.copy(worldCenter);
+      camera.position.set(worldCenter.x + 200, worldCenter.y + 250, worldCenter.z + 400);
+      controls.update();
 
       document.getElementById('loading').style.display = 'none';
     }, undefined, function (err) {
