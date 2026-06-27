@@ -324,5 +324,13 @@ def view_3d():
     return send_from_directory(os.path.abspath(os.path.join(BASE_DIR, "../admin")), "3d.html")
 
 
+@app.route("/point_cloud.ply")
+def point_cloud():
+    return send_from_directory(
+        os.path.abspath(os.path.join(BASE_DIR, "../../side-quests/01-se3-change-detection/data")),
+        "point_cloud_demo.ply",
+    )
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)

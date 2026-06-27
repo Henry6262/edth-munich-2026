@@ -29,9 +29,11 @@
     .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; }
     .btn { position: fixed; bottom: 16px; right: 16px; background: var(--cyan); color: #000; border: none; border-radius: 8px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
+    #loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--cyan); font-size: 20px; font-weight: 700; }
   </style>
 </head>
 <body>
+  <div id="loading">LOADING SE3 POINT CLOUD...</div>
   <div class="overlay">
     <h1>SCOUT C2 — 3D</h1>
     <div class="row"><span class="label">Mission Time</span><span class="value" id="time">--:--:--</span></div>
@@ -42,7 +44,7 @@
     <div id="alert-box"></div>
   </div>
   <div class="legend">
-    <div class="legend-item"><span class="dot" style="background:#FF3366"></span>Threat / Building edge</div>
+    <div class="legend-item"><span class="dot" style="background:#FF3366"></span>Threat</div>
     <div class="legend-item"><span class="dot" style="background:#FFCC00"></span>Change</div>
     <div class="legend-item"><span class="dot" style="background:#00FF88"></span>Coverage</div>
     <div class="legend-item"><span class="dot" style="background:#fff"></span>Agent</div>
@@ -51,6 +53,7 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
   <script>
     // --- Scene setup ---
     const scene = new THREE.Scene();
@@ -78,7 +81,7 @@
     dir.castShadow = true;
     scene.add(dir);
 
-    // --- Ground ---
+    // --- Ground / grid ---
     const groundGeo = new THREE.PlaneGeometry(1000, 800);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x0F1629, roughness: 0.9 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -89,14 +92,11 @@
 
     const grid = new THREE.GridHelper(1000, 20, 0x1E2A4A, 0x1E2A4A);
     grid.position.set(500, 0.2, 400);
-    // grid is square; our map is 1000x800 so scale z
     grid.scale.z = 0.8;
     scene.add(grid);
 
     // --- State ---
     let state = null;
-    const buildings = new THREE.Group();
-    scene.add(buildings);
     const agentMeshes = {};
     const fovMeshes = {};
     const alertMarkers = [];
@@ -105,35 +105,6 @@
     const coveragePoints = [];
 
     // --- Helpers ---
-    function createBuilding(b) {
-      const h = 30 + Math.random() * 40;
-      const geo = new THREE.BoxGeometry(b.w, h, b.h);
-      const mat = new THREE.MeshStandardMaterial({ color: 0x3a3f4e, roughness: 0.8 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(b.x + b.w / 2, h / 2, b.y + b.h / 2);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      buildings.add(mesh);
-
-      const edges = new THREE.EdgesGeometry(geo);
-      const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xFF3366, linewidth: 2 }));
-      line.position.copy(mesh.position);
-      buildings.add(line);
-
-      // label
-      const canvas = document.createElement('canvas');
-      canvas.width = 64; canvas.height = 32;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#6B7A9C'; ctx.font = 'bold 20px Inter'; ctx.textAlign = 'center';
-      ctx.fillText(b.id, 32, 22);
-      const tex = new THREE.CanvasTexture(canvas);
-      const spriteMat = new THREE.SpriteMaterial({ map: tex });
-      const sprite = new THREE.Sprite(spriteMat);
-      sprite.position.set(b.x + b.w / 2, h + 10, b.y + b.h / 2);
-      sprite.scale.set(30, 15, 1);
-      buildings.add(sprite);
-    }
-
     function createAgent(a) {
       const group = new THREE.Group();
       const body = new THREE.Mesh(
@@ -143,7 +114,6 @@
       body.castShadow = true;
       group.add(body);
 
-      // direction arrow
       const arrow = new THREE.Mesh(
         new THREE.ConeGeometry(4, 12, 16),
         new THREE.MeshBasicMaterial({ color: 0xffffff })
@@ -152,7 +122,6 @@
       arrow.position.set(0, 0, 14);
       group.add(arrow);
 
-      // label
       const canvas = document.createElement('canvas');
       canvas.width = 128; canvas.height = 32;
       const ctx = canvas.getContext('2d');
@@ -167,9 +136,8 @@
       scene.add(group);
       agentMeshes[a.id] = group;
 
-      // FOV cone
       const fovGeo = new THREE.ConeGeometry(70, 90, 32, 1, true);
-      fovGeo.rotateX(-Math.PI / 2); // point along +Z (angle 0 in our coords)
+      fovGeo.rotateX(-Math.PI / 2);
       fovGeo.translate(0, 0, 45);
       const fovMat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(a.color),
@@ -194,7 +162,6 @@
       fov.position.set(x, 8, z);
       fov.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
 
-      // Threat ring
       if (a.status === 'THREAT') {
         const ring = new THREE.Mesh(
           new THREE.RingGeometry(10, 12, 32),
@@ -209,10 +176,7 @@
 
     function addCoveragePoint(x, y) {
       coveragePoints.push({ x, y });
-      if (coveragePoints.length > 300) {
-        const old = coveragePoints.shift();
-        // not removing old meshes for speed; simple circular fade would need bookkeeping
-      }
+      if (coveragePoints.length > 300) coveragePoints.shift();
       const geo = new THREE.CircleGeometry(18, 16);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00FF88, transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
@@ -243,17 +207,43 @@
       });
     }
 
+    // --- Load SE3 point cloud ---
+    const loader = new THREE.PLYLoader();
+    loader.load('/point_cloud.ply', function (geometry) {
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox;
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+
+      // Scale and center the point cloud inside the 1000×800 map.
+      const targetW = 600, targetD = 450;
+      const scale = Math.min(targetW / size.x, targetD / size.y, targetD / size.z) || 1;
+      const material = new THREE.PointsMaterial({
+        size: 0.8,
+        vertexColors: true,
+        opacity: 0.9,
+        transparent: true,
+        sizeAttenuation: true
+      });
+      const points = new THREE.Points(geometry, material);
+      points.scale.set(scale, scale, scale);
+      points.position.set(500 - center.x * scale, 0, 400 - center.z * scale);
+      scene.add(points);
+
+      document.getElementById('loading').style.display = 'none';
+    }, undefined, function (err) {
+      console.error(err);
+      document.getElementById('loading').textContent = 'FAILED TO LOAD POINT CLOUD';
+    });
+
     // --- Loop ---
     async function poll() {
       try {
         const r = await fetch('/api/state');
         const s = await r.json();
         state = s;
-
-        if (!buildings.children.length) {
-          s.buildings.forEach(createBuilding);
-          s.agents.forEach(createAgent);
-        }
 
         s.agents.forEach(a => {
           if (!agentMeshes[a.id]) createAgent(a);
