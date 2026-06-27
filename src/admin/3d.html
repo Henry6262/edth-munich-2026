@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCOUT C2 — 3D Tactical View</title>
+  <style>
+    :root {
+      --bg: #0A0E1A;
+      --panel: #0F1629;
+      --cyan: #00F0FF;
+      --red: #FF3366;
+      --yellow: #FFCC00;
+      --green: #00FF88;
+      --text: #E0E6F0;
+      --muted: #6B7A9C;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; overflow: hidden; }
+    #canvas { display: block; }
+    .overlay { position: fixed; top: 16px; left: 16px; width: 300px; background: rgba(15, 22, 41, 0.92); border: 1px solid #1E2A4A; border-radius: 12px; padding: 16px; pointer-events: none; }
+    .overlay h1 { font-size: 18px; margin: 0 0 8px; color: var(--cyan); }
+    .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+    .label { color: var(--muted); }
+    .value { font-weight: 700; }
+    .alert { border-left: 3px solid var(--red); padding-left: 8px; margin-top: 8px; font-size: 12px; }
+    .alert.change { border-color: var(--yellow); }
+    .legend { position: fixed; bottom: 16px; left: 16px; background: rgba(15, 22, 41, 0.9); border: 1px solid #1E2A4A; border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .btn { position: fixed; bottom: 16px; right: 16px; background: var(--cyan); color: #000; border: none; border-radius: 8px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="overlay">
+    <h1>SCOUT C2 — 3D</h1>
+    <div class="row"><span class="label">Mission Time</span><span class="value" id="time">--:--:--</span></div>
+    <div class="row"><span class="label">Sector</span><span class="value" id="sector">Sector 7</span></div>
+    <div class="row"><span class="label">Coverage</span><span class="value" id="cov">0%</span></div>
+    <div class="row"><span class="label">Agents</span><span class="value" id="agents">5</span></div>
+    <div class="row"><span class="label">Alerts</span><span class="value" id="alerts">0</span></div>
+    <div id="alert-box"></div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><span class="dot" style="background:#FF3366"></span>Threat / Building edge</div>
+    <div class="legend-item"><span class="dot" style="background:#FFCC00"></span>Change</div>
+    <div class="legend-item"><span class="dot" style="background:#00FF88"></span>Coverage</div>
+    <div class="legend-item"><span class="dot" style="background:#fff"></span>Agent</div>
+  </div>
+  <button class="btn" onclick="location.href='/admin'">2D ADMIN →</button>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script>
+    // --- Scene setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0A0E1A);
+    scene.fog = new THREE.Fog(0x0A0E1A, 200, 1600);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 3000);
+    camera.position.set(500, 700, 900);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(500, 0, 400);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
+
+    // --- Lights ---
+    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambient);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+    dir.position.set(500, 800, 500);
+    dir.castShadow = true;
+    scene.add(dir);
+
+    // --- Ground ---
+    const groundGeo = new THREE.PlaneGeometry(1000, 800);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0F1629, roughness: 0.9 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(500, 0, 400);
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    const grid = new THREE.GridHelper(1000, 20, 0x1E2A4A, 0x1E2A4A);
+    grid.position.set(500, 0.2, 400);
+    // grid is square; our map is 1000x800 so scale z
+    grid.scale.z = 0.8;
+    scene.add(grid);
+
+    // --- State ---
+    let state = null;
+    const buildings = new THREE.Group();
+    scene.add(buildings);
+    const agentMeshes = {};
+    const fovMeshes = {};
+    const alertMarkers = [];
+    const coverageGroup = new THREE.Group();
+    scene.add(coverageGroup);
+    const coveragePoints = [];
+
+    // --- Helpers ---
+    function createBuilding(b) {
+      const h = 30 + Math.random() * 40;
+      const geo = new THREE.BoxGeometry(b.w, h, b.h);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x3a3f4e, roughness: 0.8 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(b.x + b.w / 2, h / 2, b.y + b.h / 2);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      buildings.add(mesh);
+
+      const edges = new THREE.EdgesGeometry(geo);
+      const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xFF3366, linewidth: 2 }));
+      line.position.copy(mesh.position);
+      buildings.add(line);
+
+      // label
+      const canvas = document.createElement('canvas');
+      canvas.width = 64; canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#6B7A9C'; ctx.font = 'bold 20px Inter'; ctx.textAlign = 'center';
+      ctx.fillText(b.id, 32, 22);
+      const tex = new THREE.CanvasTexture(canvas);
+      const spriteMat = new THREE.SpriteMaterial({ map: tex });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.position.set(b.x + b.w / 2, h + 10, b.y + b.h / 2);
+      sprite.scale.set(30, 15, 1);
+      buildings.add(sprite);
+    }
+
+    function createAgent(a) {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(7, 16, 16),
+        new THREE.MeshStandardMaterial({ color: new THREE.Color(a.color), emissive: new THREE.Color(a.color), emissiveIntensity: 0.4 })
+      );
+      body.castShadow = true;
+      group.add(body);
+
+      // direction arrow
+      const arrow = new THREE.Mesh(
+        new THREE.ConeGeometry(4, 12, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      arrow.geometry.rotateX(Math.PI / 2);
+      arrow.position.set(0, 0, 14);
+      group.add(arrow);
+
+      // label
+      const canvas = document.createElement('canvas');
+      canvas.width = 128; canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 20px Inter'; ctx.textAlign = 'center';
+      ctx.fillText(a.id + ' ' + a.name, 64, 22);
+      const tex = new THREE.CanvasTexture(canvas);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+      sprite.position.set(0, 20, 0);
+      sprite.scale.set(50, 12, 1);
+      group.add(sprite);
+
+      scene.add(group);
+      agentMeshes[a.id] = group;
+
+      // FOV cone
+      const fovGeo = new THREE.ConeGeometry(70, 90, 32, 1, true);
+      fovGeo.rotateX(-Math.PI / 2); // point along +Z (angle 0 in our coords)
+      fovGeo.translate(0, 0, 45);
+      const fovMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(a.color),
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const fov = new THREE.Mesh(fovGeo, fovMat);
+      scene.add(fov);
+      fovMeshes[a.id] = fov;
+    }
+
+    function updateAgent(a) {
+      const pos = a.position;
+      const x = pos.x, z = pos.y;
+      const group = agentMeshes[a.id];
+      group.position.set(x, 8, z);
+      group.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+
+      const fov = fovMeshes[a.id];
+      fov.position.set(x, 8, z);
+      fov.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+
+      // Threat ring
+      if (a.status === 'THREAT') {
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(10, 12, 32),
+          new THREE.MeshBasicMaterial({ color: 0xFF3366, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(x, 0.5, z);
+        scene.add(ring);
+        alertMarkers.push(ring);
+      }
+    }
+
+    function addCoveragePoint(x, y) {
+      coveragePoints.push({ x, y });
+      if (coveragePoints.length > 300) {
+        const old = coveragePoints.shift();
+        // not removing old meshes for speed; simple circular fade would need bookkeeping
+      }
+      const geo = new THREE.CircleGeometry(18, 16);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x00FF88, transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, 0.3, y);
+      coverageGroup.add(mesh);
+    }
+
+    function clearAlertMarkers() {
+      alertMarkers.forEach(m => scene.remove(m));
+      alertMarkers.length = 0;
+    }
+
+    function renderAlerts() {
+      if (!state) return;
+      clearAlertMarkers();
+      state.alerts.forEach(al => {
+        const b = state.buildings.find(bb => al.location.includes(bb.id));
+        if (!b) return;
+        const color = al.type === 'THREAT' ? 0xFF3366 : 0xFFCC00;
+        const marker = new THREE.Mesh(
+          new THREE.ConeGeometry(10, 25, 16),
+          new THREE.MeshBasicMaterial({ color })
+        );
+        marker.position.set(b.x + b.w / 2, 30, b.y + b.h / 2);
+        scene.add(marker);
+        alertMarkers.push(marker);
+      });
+    }
+
+    // --- Loop ---
+    async function poll() {
+      try {
+        const r = await fetch('/api/state');
+        const s = await r.json();
+        state = s;
+
+        if (!buildings.children.length) {
+          s.buildings.forEach(createBuilding);
+          s.agents.forEach(createAgent);
+        }
+
+        s.agents.forEach(a => {
+          if (!agentMeshes[a.id]) createAgent(a);
+          updateAgent(a);
+          addCoveragePoint(a.position.x, a.position.y);
+        });
+
+        renderAlerts();
+
+        document.getElementById('time').textContent = s.mission_time;
+        document.getElementById('cov').textContent = s.coverage_pct + '%';
+        document.getElementById('agents').textContent = s.agents.length;
+        document.getElementById('alerts').textContent = s.alerts.length;
+
+        const box = document.getElementById('alert-box');
+        box.innerHTML = '';
+        s.alerts.slice(0, 2).forEach(al => {
+          const d = document.createElement('div');
+          d.className = 'alert' + (al.type === 'CHANGE' ? ' change' : '');
+          d.textContent = `${al.type} — ${al.agent} @ ${al.location}`;
+          box.appendChild(d);
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    setInterval(poll, 500);
+    poll();
+    animate();
+  </script>
+</body>
+</html>

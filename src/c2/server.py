@@ -319,5 +319,10 @@ def operator():
     return send_from_directory(os.path.abspath(os.path.join(BASE_DIR, "../operator")), "index.html")
 
 
+@app.route("/3d")
+def view_3d():
+    return send_from_directory(os.path.abspath(os.path.join(BASE_DIR, "../admin")), "3d.html")
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
