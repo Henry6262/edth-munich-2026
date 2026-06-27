@@ -33,7 +33,7 @@
   </style>
 </head>
 <body>
-  <div id="loading">LOADING SE3 POINT CLOUD...</div>
+  <div id="loading">LOADING VILLAGE MAP...</div>
   <div class="overlay">
     <h1>SCOUT C2 — 3D</h1>
     <div class="row"><span class="label">Mission Time</span><span class="value" id="time">--:--:--</span></div>
@@ -56,6 +56,19 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
   <script>
     // --- Scene setup ---
+    const MAP_W = 1000, MAP_H = 800;
+    const BUILDINGS = [
+      {id: "B1", x: 80, y: 80, w: 90, h: 70},
+      {id: "B2", x: 280, y: 120, w: 110, h: 80},
+      {id: "B3", x: 480, y: 70, w: 100, h: 90},
+      {id: "B4", x: 180, y: 320, w: 130, h: 100},
+      {id: "B5", x: 440, y: 280, w: 90, h: 110},
+      {id: "B6", x: 680, y: 180, w: 120, h: 90},
+      {id: "B7", x: 130, y: 520, w: 110, h: 80},
+      {id: "B8", x: 390, y: 470, w: 140, h: 100},
+      {id: "B9", x: 640, y: 440, w: 100, h: 120},
+      {id: "B10", x: 790, y: 590, w: 110, h: 90},
+    ];
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0A0E1A);
     scene.fog = new THREE.Fog(0x0A0E1A, 200, 1600);
@@ -94,6 +107,55 @@
     grid.position.set(500, 0.2, 400);
     grid.scale.z = 0.8;
     scene.add(grid);
+
+    // --- Mesh buildings (replace point-cloud building dots) ---
+    const buildingColors = [0x8a9199, 0x7d858d, 0x9299a1, 0x848c94, 0x7a828a];
+    function createBuildings() {
+      BUILDINGS.forEach((b, i) => {
+        const height = getBuildingHeight(i);
+        const cx = b.x + b.w / 2;
+        const cz = b.y + b.h / 2;
+
+        // Main block
+        const geo = new THREE.BoxGeometry(b.w, height, b.h);
+        const mat = new THREE.MeshStandardMaterial({
+          color: buildingColors[i % buildingColors.length],
+          roughness: 0.85,
+          metalness: 0.1
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(cx, height / 2, cz);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+
+        // Flat roof (slightly overhanging)
+        const roofGeo = new THREE.BoxGeometry(b.w + 4, 1.5, b.h + 4);
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.9 });
+        const roof = new THREE.Mesh(roofGeo, roofMat);
+        roof.position.set(cx, height + 0.75, cz);
+        roof.castShadow = true;
+        roof.receiveShadow = true;
+        scene.add(roof);
+
+        // Building label sprite
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(0, 0, 64, 32);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText(b.id, 32, 21);
+        const tex = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.8 }));
+        sprite.position.set(cx, height + 8, cz);
+        sprite.scale.set(20, 10, 1);
+        scene.add(sprite);
+      });
+    }
+    createBuildings();
 
     // --- State ---
     let state = null;
@@ -190,26 +252,32 @@
       alertMarkers.length = 0;
     }
 
+    function getBuildingHeight(idx) {
+      return 32 + ((idx * 7) % 18);
+    }
+
     function renderAlerts() {
       if (!state) return;
       clearAlertMarkers();
       state.alerts.forEach(al => {
         const b = state.buildings.find(bb => al.location.includes(bb.id));
         if (!b) return;
+        const bIdx = BUILDINGS.findIndex(bb => bb.id === b.id);
+        const height = bIdx >= 0 ? getBuildingHeight(bIdx) : 35;
         const color = al.type === 'THREAT' ? 0xFF3366 : 0xFFCC00;
         const marker = new THREE.Mesh(
           new THREE.ConeGeometry(10, 25, 16),
           new THREE.MeshBasicMaterial({ color })
         );
-        marker.position.set(b.x + b.w / 2, 30, b.y + b.h / 2);
+        marker.position.set(b.x + b.w / 2, height + 18, b.y + b.h / 2);
         scene.add(marker);
         alertMarkers.push(marker);
       });
     }
 
-    // --- Load SE3 point cloud ---
+    // --- Load procedural village point cloud ---
     const loader = new THREE.PLYLoader();
-    loader.load('/point_cloud.ply', function (geometry) {
+    loader.load('/village.ply', function (geometry) {
       geometry.computeBoundingBox();
       const box = geometry.boundingBox;
       const size = new THREE.Vector3();
@@ -217,43 +285,29 @@
       const center = new THREE.Vector3();
       box.getCenter(center);
 
-      // PLY files usually store height in Z, but Three.js uses Y-up.
-      // Rotate -90° around X so PLY Z becomes world Y (up).
-      geometry.rotateX(-Math.PI / 2);
-      geometry.computeBoundingBox();
-      geometry.boundingBox.getSize(size);
-      geometry.boundingBox.getCenter(center);
-
-      // Scale and center the point cloud inside the 1000×800 map.
-      const targetW = 600, targetD = 450, targetH = 120;
-      const scale = Math.min(targetW / size.x, targetH / size.y, targetD / size.z) || 1;
+      // Village PLY is already Y-up and matches simulator coordinates:
+      // x = simulator x, y = height, z = simulator y.
+      // Map bounds are 1000 x 800, so it fits naturally over the ground plane.
       const material = new THREE.PointsMaterial({
-        size: 2.5,
+        size: 4.0,
         vertexColors: true,
         opacity: 1.0,
         transparent: false,
         sizeAttenuation: true
       });
       const points = new THREE.Points(geometry, material);
-      points.scale.set(scale, scale, scale);
-      // After rotation: size.x = east, size.y = height, size.z = north.
-      points.position.set(500 - center.x * scale, 5 - center.y * scale, 400 - center.z * scale);
       scene.add(points);
 
-      // Red bounding box so the area is obvious.
-      const boxHelper = new THREE.BoxHelper(points, 0xFF3366);
-      scene.add(boxHelper);
-
-      // Aim camera at the point cloud.
-      const worldCenter = new THREE.Vector3(500, 5 + (size.y * scale) / 2, 400);
+      // Aim camera at the village center.
+      const worldCenter = new THREE.Vector3(MAP_W / 2, 0, MAP_H / 2);
       controls.target.copy(worldCenter);
-      camera.position.set(worldCenter.x + 300, worldCenter.y + 350, worldCenter.z + 500);
+      camera.position.set(worldCenter.x + 350, worldCenter.y + 650, worldCenter.z + 750);
       controls.update();
 
       document.getElementById('loading').style.display = 'none';
     }, undefined, function (err) {
       console.error(err);
-      document.getElementById('loading').textContent = 'FAILED TO LOAD POINT CLOUD';
+      document.getElementById('loading').textContent = 'FAILED TO LOAD VILLAGE MAP';
     });
 
     // --- Loop ---

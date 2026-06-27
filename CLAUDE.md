@@ -44,6 +44,9 @@ Live demo: **SCOUT C2**, a tactical command system where 5 autonomous agents (4 
 | `src/robot/camera.py` | Pi AI Camera + standard cam wrappers. |
 | `src/robot/demo_loop.py` | Physical robot state machine (patrol → detect → track → report). |
 | `src/admin/index.html` | Admin dashboard frontend. |
+| `src/admin/3d.html` | Three.js 3D tactical view. |
+| `src/video/generate_village.py` | Procedural village point cloud generator. |
+| `static/village.ply` | Generated village point cloud (served by Flask). |
 | `src/operator/index.html` | Field operator mobile frontend. |
 | `docs/IMPLEMENTATION_PLAN.md` | This weekend's build plan. |
 | `docs/PITCH.md` | Pitch script. |
@@ -62,6 +65,9 @@ uv run run_eval.py --submission ../../src/algorithm/explorer.py --graphs graphs/
 cd side-quests/01-se3-change-detection
 python change_detector.py before.jpg after.jpg output.jpg
 
+# Generate procedural village point cloud
+python src/video/generate_village.py
+
 # Simulator / video preview
 python src/c2/simulator.py
 
@@ -75,6 +81,7 @@ python src/c2/server.py
 python src/robot/demo_loop.py
 
 # Admin dashboard: http://<laptop-ip>:5050/admin
+# 3D tactical view: http://<laptop-ip>:5050/3d
 # Operator app: http://<laptop-ip>:5050/operator
 ```
 
@@ -92,7 +99,8 @@ python src/robot/demo_loop.py
 
 ## Design decisions
 
-- **2D tactical map** for the demo video and dashboard, not 3D. Faster to build, more readable, and more cinematic.
+- **2D tactical map** for the main admin dashboard and demo video — readable and cinematic.
+- **3D tactical view** (`/3d`) using a procedural village point cloud for the "wow" factor and pitch video B-roll.
 - **Pre-recorded 3-minute cinematic video** for the main pitch; live robot + apps provide the "this is real" moments.
 - **5 agents**: Agent 1 = PiCrawler (real); Agents 2-5 = simulated on the map.
 - **Mobile operator app is a web page**, not React Native. One HTML file, opens in any browser.
@@ -111,11 +119,11 @@ python src/robot/demo_loop.py
 | LoRa mesh / ATAK integration | Mention in pitch; build post-hackathon |
 | Cloud backend or persistent database | Offline requirement |
 | Custom threat-classification model | MobileNet SSD + color heuristics only |
-| Real SLAM / 3D mapping | Too complex; 2D procedural map works |
+| Real SLAM / 3D mapping | Procedural 3D village point cloud is good enough; no real-time SLAM |
 | Explosive payload mechanism | Never demo explosives at a hackathon |
 
 ---
 
 ## Last updated
 
-2026-06-26
+2026-06-27

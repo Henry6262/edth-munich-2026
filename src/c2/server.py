@@ -332,5 +332,13 @@ def point_cloud():
     )
 
 
+@app.route("/village.ply")
+def village_ply():
+    return send_from_directory(
+        os.path.abspath(os.path.join(BASE_DIR, "../../static")),
+        "village.ply",
+    )
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
