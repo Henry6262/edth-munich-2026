@@ -10,6 +10,9 @@
 - [ ] USB robot-eyes / arm camera
 - [x] microSD card with Pi OS — flashed + SSH + WiFi ✅
 - [x] SD card reader/adapter ✅
+- [ ] Laptop (for Flask server + browser dashboards)
+- [ ] Phone (for operator app)
+- [ ] Pre-recorded 3D pitch video on laptop (backup)
 
 - [ ] Colored electrical tape (patrol path)
 - [ ] Cardboard boxes (3 sectors)
@@ -46,5 +49,10 @@
    - USB camera → USB 3.0
 3. Connect robot arm/dongle to USB.
 4. Configure WiFi at venue or use Ethernet.
-5. Test robot walking before demo.
-6. Take test photos for change detection calibration.
+5. On the laptop:
+   - `python src/video/generate_village.py` to build `static/village.ply`
+   - `python src/c2/server.py` to start Flask
+   - Open `/admin` and `/3d` in separate browser tabs
+   - Open `/operator` on the phone
+6. Test robot walking before demo.
+7. Take test photos for change detection calibration.
