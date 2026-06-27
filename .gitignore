@@ -28,6 +28,12 @@ Thumbs.db
 *.png
 *.mp4
 
+# External challenge repos (cloned separately)
+challenge/graph_explo/
+
+# SE3 data assets (provided at event, large files)
+side-quests/01-se3-change-detection/data/
+
 # Environment
 .env
 .env.local

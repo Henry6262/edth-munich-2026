@@ -1,67 +1,111 @@
-# SCOUT — EDTH Munich 2026
+# SCOUT C2 — EDTH Munich 2026
 
-**Challenge:** 01-ats — 3D Graph Exploration & Surveillance  
-**Team:** Henry + recruited teammates  
-**Hardware:** PiCrawler quadruped + Raspberry Pi 5 + Sony IMX500 AI Camera
+**Challenges:** 01-ats (3D Graph Exploration & Surveillance) + 01-se3 Track 2 (Tactical Change Detection)  
+**Demo:** Tactical command system for 5 autonomous agents (1 PiCrawler + 4 simulated) with a 2D village map, FOV coverage, threat/change alerts, an admin dashboard, and a field-operator mobile web app.
+
+---
 
 ## The Pitch in One Line
 
-A €200 autonomous ground sensor node that walks a perimeter, explores an unknown graph, and surveils it — submitted as a Python solution to the ATS GmbH challenge and demonstrated live with a walking robot.
+A €200 autonomous ground sensor node connected to a military-style C2 interface: one map, every agent, complete situational awareness.
+
+---
 
 ## Project Layout
 
 ```
 edth-munich-2026/
-├── challenge/graph_explo/   # Cloned 01-ats evaluation repo
+├── challenge/graph_explo/               # Cloned 01-ats evaluation repo
+├── side-quests/01-se3-change-detection/ # 01-se3 Track 2 submission
 ├── src/
-│   ├── algorithm/           # Challenge Explorer policy
-│   │   └── explorer.py      # Our submission-ready Explorer class
-│   ├── robot/               # PiCrawler + camera control
-│   │   ├── crawler.py
-│   │   └── camera.py
-│   ├── dashboard/           # Streamlit tactical UI
-│   │   └── app.py
-│   └── main.py              # Physical demo orchestration
-├── config/
-│   └── params.toml          # Robot demo parameters
-├── tests/
-│   └── test_algorithm.py    # Unit tests for Explorer
+│   ├── algorithm/
+│   │   └── explorer.py                  # 01-ats submission
+│   ├── robot/
+│   │   ├── crawler.py                   # PiCrawler wrapper
+│   │   ├── camera.py                    # Camera wrappers
+│   │   └── demo_loop.py                 # Physical robot state machine
+│   └── c2/
+│       ├── server.py                    # Flask telemetry/video/command server
+│       ├── simulator.py                 # 2D tactical map simulator
+│       └── video_renderer.py            # 3-minute demo video generator
+├── src/admin/index.html                 # Admin dashboard (tablet/laptop)
+├── src/operator/index.html              # Field operator app (phone)
+├── config/params.toml                   # Demo parameters
+├── tests/test_algorithm.py              # Explorer unit tests
 ├── docs/
-│   ├── PITCH.md             # Word-for-word pitch script
-│   └── DEMO_SCRIPT.md       # 3-minute demo flow
-└── scripts/
-    └── setup_pi.sh          # Pi setup helpers
+│   ├── IMPLEMENTATION_PLAN.md           # Weekend build plan
+│   ├── PITCH.md                         # Pitch script
+│   ├── DEMO_SCRIPT.md                   # 3-minute demo flow
+│   └── HARDWARE_CHECKLIST.md            # What to bring
+└── scripts/setup_pi.sh                  # Pi setup helpers
 ```
+
+---
 
 ## Quick Start
 
-### 1. Run the challenge evaluation
+### 1. Evaluate 01-ats
 
 ```bash
 cd challenge/graph_explo
 uv run run_eval.py --submission ../../src/algorithm/explorer.py --graphs graphs/train --quiet
 ```
 
-### 2. Run the robot demo (on the Pi)
+### 2. Evaluate 01-se3 Track 2
 
 ```bash
-python src/main.py
+cd side-quests/01-se3-change-detection
+python change_detector.py before.jpg after.jpg output.jpg
 ```
 
-### 3. Run the dashboard
+### 3. Run the simulator / video preview
 
 ```bash
-streamlit run src/dashboard/app.py
+python src/c2/simulator.py
 ```
+
+### 4. Render the 3-minute demo video
+
+```bash
+python src/c2/video_renderer.py
+```
+
+### 5. Run the telemetry server
+
+```bash
+# Install C2 deps once
+pip install -r requirements.txt
+
+python src/c2/server.py
+```
+
+Then open:
+- Admin dashboard: `http://<laptop-ip>:5050/admin`
+- Operator app: `http://<laptop-ip>:5050/operator`
+
+### 6. Run the robot demo (on the Pi)
+
+```bash
+python src/robot/demo_loop.py
+```
+
+---
 
 ## Current Status
 
-- [x] Challenge repo cloned
+- [x] Official 01-ats challenge repo cloned (`SamEberl/graph_explo`)
 - [x] Explorer algorithm skeleton
+- [x] Change-detection side quest skeleton
+- [x] Flask telemetry / command server (`src/c2/server.py`)
+- [x] 2D tactical simulator with 5 agents, FOV, coverage, alerts
+- [x] Admin dashboard frontend (`src/admin/index.html`)
+- [x] Field operator mobile frontend (`src/operator/index.html`)
 - [ ] Algorithm tuned on training graphs
 - [ ] Robot integration tested
-- [ ] Dashboard complete
+- [ ] 3-minute demo video rendered
 - [ ] Pitch rehearsed
+
+---
 
 ## Hardware Checklist for Venue
 
@@ -70,17 +114,23 @@ streamlit run src/dashboard/app.py
 - [ ] Sony IMX500 AI Camera
 - [ ] Standard Pi Camera (wide)
 - [ ] USB robot-arm / robot-eyes camera
-- [ ] microSD card + reader (buy at venue if missing)
-- [ ] Ethernet cable (buy at venue if missing)
+- [ ] microSD card + reader
+- [ ] Ethernet cable
 - [ ] Power bank
 - [ ] Colored electrical tape (patrol path)
-- [ ] Cardboard boxes (3 sectors)
+- [ ] Cardboard boxes (3 sectors / buildings)
+- [ ] Red / blue / yellow cards (threat / civilian / change markers)
 - [ ] "Drone" cutout (black cardboard on stick)
 - [ ] Laptop
+- [ ] Phone for operator app
+
+---
 
 ## What NOT to Build
 
-- Mobile app with soldier shared state — out of scope for 42 hours
-- Cloud backend — no internet dependency, demo must work offline
-- Custom drone detection model — use MobileNet SSD out of the box
+- Native mobile app — browser page is enough
+- Cloud backend — demo must work offline
+- Custom drone / threat detection model — use MobileNet SSD / IMX500 out of the box
 - Real SLAM — fake the map with the challenge graph / tape path
+- LoRa / ATAK integration — mention in pitch only
+- Explosive payload mechanism — never demo at a hackathon

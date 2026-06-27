@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SCOUT — Field Op</title>
+  <style>
+    :root {
+      --bg: #0A0E1A;
+      --panel: #0F1629;
+      --elevated: #141D35;
+      --border: #1E2A4A;
+      --cyan: #00F0FF;
+      --red: #FF3366;
+      --yellow: #FFCC00;
+      --green: #00FF88;
+      --text: #E0E6F0;
+      --muted: #6B7A9C;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+    #app { max-width: 430px; margin: 0 auto; min-height: 100%; background: var(--bg); position: relative; overflow: hidden; }
+    .screen { display: none; padding: 16px; min-height: 100vh; }
+    .screen.active { display: block; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .back { font-size: 20px; cursor: pointer; padding: 4px; }
+
+    /* Splash */
+    .splash-logo { width: 80px; height: 80px; background: var(--cyan); margin: 60px auto 20px; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+    .splash-title { text-align: center; font-size: 36px; font-weight: 700; color: var(--cyan); }
+    .splash-sub { text-align: center; font-size: 16px; color: var(--text); margin-bottom: 40px; }
+    .mission-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 12px; text-align: center; cursor: pointer; transition: transform .1s; }
+    .mission-card:active { transform: scale(0.98); }
+    .mission-card h3 { margin: 8px 0 4px; font-size: 20px; }
+    .mission-card p { margin: 0; font-size: 13px; color: var(--muted); }
+    .mc-green { border-left: 6px solid var(--green); }
+    .mc-red { border-left: 6px solid var(--red); }
+    .mc-cyan { border-left: 6px solid var(--cyan); }
+
+    /* Dashboard */
+    #minimap { width: 100%; height: 260px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+    .agent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+    .agent-mini { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; }
+    .agent-mini.alert { border-color: var(--red); }
+    .agent-mini .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; }
+    .agent-mini .name { font-weight: 700; font-size: 13px; }
+    .agent-mini .sub { font-size: 11px; color: var(--muted); }
+    .cov-bar { height: 10px; background: var(--elevated); border-radius: 5px; overflow: hidden; margin: 6px 0 16px; }
+    .cov-fill { height: 100%; background: var(--green); width: 0%; }
+    .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+    .btn { min-height: 56px; border: none; border-radius: 8px; font-weight: 700; font-size: 13px; color: #fff; background: var(--elevated); }
+    .btn:active { transform: scale(0.96); }
+    .btn-cyan { background: var(--cyan); color: #000; }
+    .btn-green { background: var(--green); color: #000; }
+    .alert-list { margin-bottom: 16px; }
+    .alert-row { background: var(--panel); border-left: 4px solid var(--red); padding: 10px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
+    .alert-row.change { border-color: var(--yellow); }
+
+    /* Agent detail */
+    .feed-box { width: 100%; height: 220px; background: #000; border-radius: 10px; border: 1px solid var(--border); position: relative; overflow: hidden; }
+    .feed-box img { width: 100%; height: 100%; object-fit: cover; }
+    .crosshair { position: absolute; top: 50%; left: 50%; width: 40px; height: 40px; transform: translate(-50%, -50%); pointer-events: none; }
+    .crosshair::before, .crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.6); }
+    .crosshair::before { width: 100%; height: 2px; top: 50%; left: 0; }
+    .crosshair::after { width: 2px; height: 100%; top: 0; left: 50%; }
+    .stat-row { display: flex; align-items: center; margin: 8px 0; font-size: 13px; }
+    .stat-label { width: 80px; color: var(--muted); }
+    .stat-bar { flex: 1; height: 10px; background: var(--elevated); border-radius: 5px; overflow: hidden; }
+    .stat-fill { height: 100%; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .controls .btn { min-height: 64px; }
+    .detonate { grid-column: span 2; background: var(--red); }
+
+    /* Modal */
+    .modal { display: none; position: fixed; inset: 0; background: rgba(10,14,26,0.95); z-index: 100; padding: 24px; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .modal.active { display: flex; }
+    .modal-icon { width: 64px; height: 64px; background: var(--red); border-radius: 50%; margin-bottom: 16px; animation: pulse 1s infinite; }
+    .modal h2 { color: var(--red); font-size: 28px; }
+    .modal .btn { margin-top: 12px; }
+
+    /* Change screen */
+    .before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .photo { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; height: 160px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); }
+    .detail-row { background: var(--panel); border-radius: 8px; padding: 12px; margin-bottom: 8px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Splash -->
+    <div class="screen active" id="screen-splash">
+      <div class="splash-logo"></div>
+      <div class="splash-title">SCOUT</div>
+      <div class="splash-sub">TACTICAL COMMAND</div>
+      <div class="mission-card mc-green" onclick="setMission('CLEAR')">
+        <h3>CLEAR & HOLD</h3><p>Secure area. Hold position. No action.</p>
+      </div>
+      <div class="mission-card mc-red" onclick="setMission('ENGAGE')">
+        <h3>ENGAGE & CLEAR</h3><p>Locate threats. Neutralize. Deploy payload.</p>
+      </div>
+      <div class="mission-card mc-cyan" onclick="setMission('RECON')">
+        <h3>RECON SWEEP</h3><p>Patrol area. Detect changes. Report.</p>
+      </div>
+      <div style="text-align:center;margin-top:20px" class="label">Operator: CMD-01 &nbsp;● ONLINE</div>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="screen" id="screen-dashboard">
+      <div class="header">
+        <div><h1>SQUAD DASHBOARD</h1><div class="label" id="dash-sub">SECTOR 7 • --:--:--</div></div>
+        <div style="font-size:22px">🔔</div>
+      </div>
+      <canvas id="minimap"></canvas>
+      <div class="label" style="margin:8px 0 4px">Coverage <span id="op-cov">0%</span></div>
+      <div class="cov-bar"><div class="cov-fill" id="op-cov-bar"></div></div>
+      <div class="agent-grid" id="op-squad"></div>
+      <div class="actions">
+        <button class="btn btn-cyan" onclick="sendCmd('DEPLOY','A-3')">DEPLOY</button>
+        <button class="btn" onclick="sendCmd('RECON')">RECON</button>
+        <button class="btn btn-green" onclick="sendCmd('RECALL')">RECALL</button>
+      </div>
+      <div class="label" style="margin-bottom:8px">Active Alerts</div>
+      <div class="alert-list" id="op-alerts"></div>
+      <button class="btn" onclick="show('screen-log')">MISSION LOG →</button>
+    </div>
+
+    <!-- Agent Detail -->
+    <div class="screen" id="screen-agent">
+      <div class="header">
+        <div class="back" onclick="show('screen-dashboard')">◀</div>
+        <div><h2 id="agent-title">A-1 ALPHA</h2><div class="label" id="agent-sub">GROUND UNIT • SECTOR A</div></div>
+        <div style="font-size:20px">📶</div>
+      </div>
+      <div class="feed-box"><img id="agent-feed" src="/video_feed"><div class="crosshair"></div></div>
+      <div style="margin:12px 0" class="label">STATUS</div>
+      <div id="agent-status">PATROLLING</div>
+      <div class="stat-row"><div class="stat-label">Battery</div><div class="stat-bar"><div class="stat-fill" id="bat-fill" style="width:78%;background:var(--green)"></div></div></div>
+      <div class="stat-row"><div class="stat-label">Signal</div><div class="stat-bar"><div class="stat-fill" id="sig-fill" style="width:92%;background:var(--cyan)"></div></div></div>
+      <div class="controls">
+        <button class="btn btn-cyan" onclick="sendCmd('DEPLOY', selectedAgent)">DEPLOY</button>
+        <button class="btn" onclick="sendCmd('HOLD', selectedAgent)">HOLD</button>
+        <button class="btn" onclick="sendCmd('MARK', selectedAgent)">MARK</button>
+        <button class="btn detonate" id="det-btn" onclick="detonate()">DETONATE</button>
+      </div>
+    </div>
+
+    <!-- Threat Modal -->
+    <div class="modal" id="threat-modal">
+      <div class="modal-icon"></div>
+      <h2>🚨 THREAT DETECTED</h2>
+      <p id="threat-text">Agent: A-3 CHARLIE<br>Location: Building 7, Room 3<br>Confidence: 91%</p>
+      <button class="btn" style="background:var(--yellow);color:#000" onclick="sendCmd('HOLD', threatAgent); closeModal()">HOLD POSITION</button>
+      <button class="btn btn-cyan" onclick="sendCmd('DEPLOY', threatAgent); closeModal()">DEPLOY ROBOT</button>
+      <button class="btn detonate" onclick="sendCmd('DEPLOY', threatAgent); closeModal()">DETONATE</button>
+      <div style="margin-top:16px;color:var(--muted);font-size:12px">Swipe up to dismiss</div>
+    </div>
+
+    <!-- Change Detection -->
+    <div class="screen" id="screen-change">
+      <div class="header">
+        <div class="back" onclick="show('screen-dashboard')">◀</div>
+        <div><h2>CHANGE DETECTED</h2><div class="label">PASS 2 RECON SWEEP</div></div>
+      </div>
+      <div class="before-after">
+        <div class="photo" id="before">BEFORE<br>Pass 1</div>
+        <div class="photo" id="after">AFTER<br>Pass 2</div>
+      </div>
+      <div class="detail-row">🟡 Door status: CLOSED → OPEN</div>
+      <div class="detail-row">Significance: HIGH<br>Confidence: 94%</div>
+      <button class="btn" style="background:var(--red);margin-top:8px" onclick="sendCmd('MARK','A-4');show('screen-dashboard')">MARK FOR STRIKE</button>
+      <button class="btn" style="background:var(--yellow);color:#000;margin-top:8px" onclick="sendCmd('HOLD','A-4');show('screen-dashboard')">HOLD — INVESTIGATE</button>
+    </div>
+
+    <!-- Mission Log -->
+    <div class="screen" id="screen-log">
+      <div class="header">
+        <div class="back" onclick="show('screen-dashboard')">◀</div>
+        <div><h2>MISSION LOG</h2><div class="label">SECTOR 7</div></div>
+      </div>
+      <div id="log-list"></div>
+    </div>
+  </div>
+
+  <script>
+    let state = null;
+    let selectedAgent = 'A-1';
+    let threatAgent = 'A-3';
+    let currentScreen = 'screen-splash';
+    const canvas = document.getElementById('minimap');
+    const ctx = canvas.getContext('2d');
+
+    function resizeMini() {
+      const r = canvas.parentElement.getBoundingClientRect();
+      canvas.width = r.width - 32;
+      canvas.height = 260;
+    }
+    window.addEventListener('resize', resizeMini);
+    resizeMini();
+
+    function show(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      currentScreen = id;
+      if (id !== 'screen-dashboard') document.getElementById('threat-modal').classList.remove('active');
+    }
+
+    function setMission(m) {
+      show('screen-dashboard');
+    }
+
+    function sx(x) { return (x / 1000) * canvas.width; }
+    function sy(y) { return canvas.height - (y / 800) * canvas.height; }
+
+    function drawMini() {
+      ctx.fillStyle = '#0F1629';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!state) return;
+      state.buildings.forEach(b => {
+        ctx.fillStyle = '#3a3f4e'; ctx.strokeStyle = '#1E2A4A';
+        ctx.fillRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
+        ctx.strokeRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
+      });
+      state.agents.forEach(a => {
+        const x = sx(a.position.x), y = sy(a.position.y);
+        ctx.fillStyle = a.color + '25';
+        ctx.beginPath(); ctx.moveTo(x, y);
+        const rad = Math.PI / 180;
+        ctx.arc(x, y, sx(50) - sx(0), -(a.position.angle + 45) * rad, -(a.position.angle - 45) * rad);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = a.color;
+        ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = '10px Inter'; ctx.fillText(a.id, x - 6, y + 3);
+      });
+    }
+
+    async function sendCmd(cmd, agent) {
+      await fetch('/api/command', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({command: cmd, agent})});
+    }
+
+    function detonate() {
+      const btn = document.getElementById('det-btn');
+      if (btn.textContent === 'DETONATE') {
+        btn.textContent = 'CONFIRM DETONATE';
+        setTimeout(() => { btn.textContent = 'DETONATE'; }, 3000);
+      } else {
+        btn.textContent = 'EXECUTED'; btn.style.background = '#555';
+        sendCmd('DEPLOY', selectedAgent);
+        setTimeout(() => { btn.textContent = 'DETONATE'; btn.style.background = 'var(--red)'; }, 3000);
+      }
+    }
+
+    function closeModal() { document.getElementById('threat-modal').classList.remove('active'); }
+
+    function render() {
+      if (!state) return;
+      document.getElementById('dash-sub').textContent = `SECTOR 7 • ${state.mission_time}`;
+      document.getElementById('op-cov').textContent = state.coverage_pct + '%';
+      document.getElementById('op-cov-bar').style.width = state.coverage_pct + '%';
+      drawMini();
+
+      const grid = document.getElementById('op-squad');
+      grid.innerHTML = '';
+      state.agents.forEach(a => {
+        const d = document.createElement('div');
+        d.className = 'agent-mini' + (a.status === 'THREAT' ? ' alert' : '');
+        const sub = a.status === 'THREAT' ? 'THREAT' : (a.status === 'CHANGE' ? 'CHNG' : `${a.battery}%`);
+        d.innerHTML = `<div><span class="dot" style="background:${a.color}"></span><span style="font-size:11px">${a.id}</span></div>
+          <div class="name">${a.name}</div>
+          <div class="sub" style="color:${a.status==='THREAT'?'var(--red)':'var(--muted)'}">${sub}</div>`;
+        d.onclick = () => { selectedAgent = a.id; openAgent(a); };
+        grid.appendChild(d);
+      });
+
+      const alerts = document.getElementById('op-alerts');
+      alerts.innerHTML = '';
+      if (state.alerts.length === 0) alerts.innerHTML = '<div style="color:var(--muted);font-size:12px">No active alerts.</div>';
+      state.alerts.forEach(al => {
+        const d = document.createElement('div');
+        d.className = 'alert-row' + (al.type === 'CHANGE' ? ' change' : '');
+        d.innerHTML = `${al.type === 'THREAT' ? '🔴' : '🟡'} ${al.agent}: ${al.type} — ${al.location}`;
+        d.onclick = () => { if (al.type === 'CHANGE') show('screen-change'); };
+        alerts.appendChild(d);
+      });
+
+      // auto threat modal
+      const threat = state.alerts.find(a => a.type === 'THREAT');
+      if (threat && currentScreen !== 'screen-agent') {
+        threatAgent = threat.agent;
+        document.getElementById('threat-text').innerHTML = `Agent: ${threat.agent}<br>Location: ${threat.location}<br>Confidence: ${Math.round((threat.confidence || 0) * 100)}%`;
+        document.getElementById('threat-modal').classList.add('active');
+      }
+
+      // log screen
+      const logList = document.getElementById('log-list');
+      logList.innerHTML = '';
+      state.mission_log.slice(0, 20).forEach(l => {
+        const d = document.createElement('div'); d.className = 'detail-row';
+        d.innerHTML = `<span style="color:var(--muted)">${l.time}</span> ${l.text}`;
+        logList.appendChild(d);
+      });
+    }
+
+    function openAgent(a) {
+      document.getElementById('agent-title').textContent = `${a.id} ${a.name}`;
+      document.getElementById('agent-sub').textContent = `${a.type} UNIT • SECTOR ${a.id.split('-')[1]}`;
+      document.getElementById('agent-status').textContent = a.status;
+      document.getElementById('agent-status').style.color = a.status === 'THREAT' ? 'var(--red)' : a.status === 'HOLD' ? 'var(--yellow)' : 'var(--green)';
+      document.getElementById('bat-fill').style.width = a.battery + '%';
+      document.getElementById('sig-fill').style.width = a.signal + '%';
+      show('screen-agent');
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch('/api/state');
+        state = await r.json();
+        render();
+      } catch (e) { console.error(e); }
+    }
+
+    setInterval(poll, 500);
+    poll();
+  </script>
+</body>
+</html>

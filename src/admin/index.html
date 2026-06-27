@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCOUT C2 — Admin</title>
+  <style>
+    :root {
+      --bg: #0A0E1A;
+      --panel: #0F1629;
+      --elevated: #141D35;
+      --border: #1E2A4A;
+      --cyan: #00F0FF;
+      --red: #FF3366;
+      --yellow: #FFCC00;
+      --green: #00FF88;
+      --text: #E0E6F0;
+      --muted: #6B7A9C;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; overflow: hidden; }
+    .topbar { height: 48px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--cyan); }
+    .logo { width: 24px; height: 24px; background: var(--cyan); clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
+    .meta { display: flex; gap: 20px; font-size: 13px; color: var(--muted); }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+    .main { display: flex; height: calc(100% - 48px); }
+    .map-wrap { flex: 1; display: flex; flex-direction: column; padding: 12px; }
+    #map { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; width: 100%; }
+    .sidebar { width: 360px; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; overflow-y: auto; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    .squad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+    .agent-card { background: var(--elevated); border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; }
+    .agent-card.alert { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+    .agent-dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; margin-right: 4px; border: 2px solid white; }
+    .agent-id { font-size: 12px; color: var(--muted); }
+    .agent-name { font-weight: 700; font-size: 14px; }
+    .agent-status { font-size: 11px; text-transform: uppercase; margin-top: 4px; }
+    .coverage { margin-bottom: 16px; }
+    .bar { height: 14px; background: var(--elevated); border-radius: 7px; overflow: hidden; border: 1px solid var(--border); }
+    .bar-fill { height: 100%; background: var(--green); width: 0%; transition: width 0.3s; }
+    .section { margin-bottom: 16px; }
+    .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .alert-item { background: var(--elevated); border-left: 4px solid var(--red); padding: 8px; border-radius: 4px; margin-bottom: 6px; font-size: 13px; }
+    .alert-item.change { border-color: var(--yellow); }
+    button { width: 100%; background: var(--elevated); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 8px; font-size: 14px; cursor: pointer; }
+    button:hover { background: #1c2640; }
+    button.primary { background: var(--cyan); color: #000; border: none; font-weight: 700; }
+    button.danger { background: var(--red); color: #fff; border: none; }
+    .log { max-height: 120px; overflow-y: auto; font-size: 12px; }
+    .log-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .bottom { display: flex; gap: 12px; height: 180px; margin-top: 12px; }
+    .feed { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; }
+    .feed-title { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+    .feed img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; background: #000; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><div class="logo"></div> SCOUT C2</div>
+    <div class="meta">
+      <span id="sector">SECTOR 7</span>
+      <span id="clock">--:--:--</span>
+      <span><span class="status-dot"></span>ONLINE</span>
+    </div>
+  </div>
+  <div class="main">
+    <div class="map-wrap">
+      <canvas id="map"></canvas>
+      <div class="bottom">
+        <div class="feed"><div class="feed-title">Live Feed — A-1</div><img id="live" src="/video_feed" alt="live"></div>
+        <div class="feed"><div class="feed-title">Mission Log</div><div class="log" id="mission-log"></div></div>
+        <div class="feed"><div class="feed-title">Change Log</div><div class="log" id="change-log"></div></div>
+      </div>
+    </div>
+    <div class="sidebar">
+      <h2>SQUAD STATUS</h2>
+      <div class="squad" id="squad"></div>
+      <div class="coverage">
+        <div class="section-title">Coverage <span id="cov-pct">0%</span></div>
+        <div class="bar"><div class="bar-fill" id="cov-bar"></div></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Active Alerts</div>
+        <div id="alerts"></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Command Actions</div>
+        <button class="primary" onclick="send('DEPLOY','A-3')">DEPLOY TO A-3</button>
+        <button onclick="send('RECON')">RECON SWEEP ALL</button>
+        <button class="danger" onclick="send('RECALL')">EMERGENCY RECALL</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById('map');
+    const ctx = canvas.getContext('2d');
+    let state = null;
+    let coveragePoints = [];
+
+    function resize() {
+      const r = canvas.parentElement.getBoundingClientRect();
+      canvas.width = r.width - 24;
+      canvas.height = r.height - 220;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function sx(x) { return (x / 1000) * canvas.width; }
+    function sy(y) { return canvas.height - (y / 800) * canvas.height; }
+
+    function drawMap() {
+      ctx.fillStyle = '#0A0E1A';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!state) return;
+
+      // grid
+      ctx.strokeStyle = '#1E2A4A';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 10; i++) {
+        ctx.beginPath(); ctx.moveTo(sx(i * 100), 0); ctx.lineTo(sx(i * 100), canvas.height); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, sy(i * 80)); ctx.lineTo(canvas.width, sy(i * 80)); ctx.stroke();
+      }
+
+      // roads
+      ctx.strokeStyle = '#2a2f3e';
+      ctx.lineWidth = 6;
+      state.roads.forEach(road => {
+        ctx.beginPath();
+        ctx.moveTo(sx(road[0][0]), sy(road[0][1]));
+        ctx.lineTo(sx(road[1][0]), sy(road[1][1]));
+        ctx.stroke();
+      });
+
+      // buildings
+      state.buildings.forEach(b => {
+        ctx.fillStyle = '#3a3f4e';
+        ctx.strokeStyle = '#1E2A4A';
+        ctx.lineWidth = 2;
+        ctx.fillRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
+        ctx.strokeRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
+        ctx.fillStyle = '#6B7A9C';
+        ctx.font = '12px Inter';
+        ctx.fillText(b.id, sx(b.x + b.w / 2) - 8, sy(b.y + b.h / 2));
+      });
+
+      // coverage circles
+      ctx.fillStyle = 'rgba(0, 255, 136, 0.15)';
+      coveragePoints.forEach(p => {
+        const r = sx(20) - sx(0);
+        ctx.beginPath();
+        ctx.arc(sx(p.x), sy(p.y), r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // agents
+      state.agents.forEach(a => {
+        const x = sx(a.position.x), y = sy(a.position.y);
+        const r = 10;
+        // fov wedge
+        ctx.fillStyle = a.color + '22';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        const rad = Math.PI / 180;
+        const a1 = (a.position.angle - 45) * rad, a2 = (a.position.angle + 45) * rad;
+        const rr = sx(90) - sx(0);
+        ctx.arc(x, y, rr, -a2, -a1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = a.color + '55';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // body
+        ctx.fillStyle = a.color;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+        // direction
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(-a.position.angle * rad) * (r + 6), y + Math.sin(-a.position.angle * rad) * (r + 6)); ctx.stroke();
+        // label
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Inter'; ctx.fillText(a.id, x - 8, y + 4);
+
+        if (a.status === 'THREAT') {
+          ctx.strokeStyle = '#FF3366';
+          ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.arc(x, y, r + 8 + Math.sin(Date.now() / 200) * 3, 0, Math.PI * 2); ctx.stroke();
+        }
+      });
+
+      // alert markers
+      state.alerts.forEach(al => {
+        const b = state.buildings.find(b => al.location.includes(b.id));
+        if (!b) return;
+        const x = sx(b.x + b.w / 2), y = sy(b.y + b.h / 2);
+        ctx.fillStyle = al.type === 'THREAT' ? '#FF3366' : '#FFCC00';
+        ctx.beginPath();
+        ctx.moveTo(x, y - 12); ctx.lineTo(x + 10, y + 8); ctx.lineTo(x - 10, y + 8);
+        ctx.closePath(); ctx.fill();
+      });
+    }
+
+    function render() {
+      drawMap();
+      if (!state) return;
+      document.getElementById('clock').textContent = state.mission_time;
+      document.getElementById('cov-pct').textContent = state.coverage_pct + '%';
+      document.getElementById('cov-bar').style.width = state.coverage_pct + '%';
+
+      const squad = document.getElementById('squad');
+      squad.innerHTML = '';
+      state.agents.forEach(a => {
+        const div = document.createElement('div');
+        div.className = 'agent-card' + (a.status === 'THREAT' ? ' alert' : '');
+        div.innerHTML = `<div><span class="agent-dot" style="background:${a.color}"></span><span class="agent-id">${a.id}</span></div>
+          <div class="agent-name">${a.name}</div>
+          <div class="agent-status" style="color:${a.status==='THREAT'?'#FF3366':a.status==='HOLD'?'#FFCC00':'#00FF88'}">${a.status}</div>`;
+        squad.appendChild(div);
+      });
+
+      const alerts = document.getElementById('alerts');
+      alerts.innerHTML = '';
+      if (state.alerts.length === 0) alerts.innerHTML = '<div style="color:var(--muted);font-size:12px">No active alerts.</div>';
+      state.alerts.forEach(al => {
+        const d = document.createElement('div');
+        d.className = 'alert-item' + (al.type === 'CHANGE' ? ' change' : '');
+        d.innerHTML = `<b>${al.type}</b> — ${al.agent} @ ${al.location}<br>${al.detail || ''}`;
+        alerts.appendChild(d);
+      });
+
+      function fillLog(el, rows) {
+        const e = document.getElementById(el);
+        e.innerHTML = '';
+        rows.slice(0, 8).forEach(r => {
+          const d = document.createElement('div'); d.className = 'log-row';
+          d.innerHTML = `<span style="color:var(--muted)">${r.time}</span> ${r.text}`;
+          e.appendChild(d);
+        });
+      }
+      fillLog('mission-log', state.mission_log);
+      fillLog('change-log', state.change_log);
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch('/api/state');
+        const s = await r.json();
+        state = s;
+        s.agents.forEach(a => coveragePoints.push({x: a.position.x, y: a.position.y}));
+        if (coveragePoints.length > 800) coveragePoints = coveragePoints.slice(-800);
+        render();
+      } catch (e) { console.error(e); }
+    }
+
+    async function send(cmd, agent) {
+      await fetch('/api/command', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({command: cmd, agent})});
+    }
+
+    setInterval(poll, 500);
+    setInterval(() => { if (state) render(); }, 100);
+    poll();
+  </script>
+</body>
+</html>

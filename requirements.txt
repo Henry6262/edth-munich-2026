@@ -1,0 +1,6 @@
+# SCOUT C2 runtime dependencies (install with: pip install -r requirements.txt)
+flask>=3.0
+numpy>=1.24
+opencv-python>=4.8
+shapely>=2.0
+matplotlib>=3.7
