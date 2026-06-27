@@ -18,9 +18,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import cv2
+import heapq
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_from_directory
-from shapely.geometry import Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,14 +114,28 @@ class Simulator:
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
 
+    def _building_waypoint(self, b: dict, last: tuple) -> tuple:
+        """Return a point just outside the building, closest to the previous waypoint."""
+        margin = 20.0
+        corners = [
+            (b["x"] - margin, b["y"] - margin),
+            (b["x"] - margin, b["y"] + b["h"] + margin),
+            (b["x"] + b["w"] + margin, b["y"] - margin),
+            (b["x"] + b["w"] + margin, b["y"] + b["h"] + margin),
+        ]
+        return min(corners, key=lambda c: math.hypot(c[0] - last[0], c[1] - last[1]))
+
     def _init_agents(self) -> None:
-        centers = [(b["x"] + b["w"] / 2, b["y"] + b["h"] / 2) for b in BUILDINGS]
         names = ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO"]
         types = ["GROUND", "DRONE", "GROUND", "DRONE", "GROUND"]
         drop = (500, 750)
         for i, (aid, name, atype) in enumerate(zip(AGENT_COLORS, names, types)):
-            # simple route: drop -> a few buildings -> back
-            route = [drop, centers[i % len(centers)], centers[(i + 3) % len(centers)], centers[(i + 6) % len(centers)], drop]
+            # Patrol route: drop -> buildings (outside corners) -> back
+            route = [drop]
+            for idx in [i, i + 3, i + 6]:
+                b = BUILDINGS[idx % len(BUILDINGS)]
+                route.append(self._building_waypoint(b, route[-1]))
+            route.append(drop)
             path = self._interpolate(route)
             a = Agent(
                 id=aid,
@@ -136,9 +151,88 @@ class Simulator:
             )
             self.state.agents.append(a)
 
+    def _building_polygons(self, margin: float = 12.0) -> List[Polygon]:
+        return [
+            box(b["x"] - margin, b["y"] - margin, b["x"] + b["w"] + margin, b["y"] + b["h"] + margin)
+            for b in BUILDINGS
+        ]
+
+    def _route_segment(self, p1: tuple, p2: tuple) -> List[tuple]:
+        """A* route from p1 to p2 avoiding building footprints."""
+        # Fast path: no obstacles in the way.
+        line = LineString([p1, p2])
+        obstacles = self._building_polygons(margin=16.0)
+        if not any(line.intersects(o) for o in obstacles):
+            return [p1, p2]
+
+        # Grid-based A*.
+        cell = 20.0
+        cols, rows = int(math.ceil(MAP_W / cell)), int(math.ceil(MAP_H / cell))
+        obstacle_cells = set()
+        for gx in range(cols):
+            for gy in range(rows):
+                cx, cy = gx * cell + cell / 2, gy * cell + cell / 2
+                pt = (cx, cy)
+                if any(o.contains(Point(pt)) for o in obstacles):
+                    obstacle_cells.add((gx, gy))
+
+        def to_grid(p):
+            return (int(p[0] // cell), int(p[1] // cell))
+
+        def to_world(g):
+            return (g[0] * cell + cell / 2, g[1] * cell + cell / 2)
+
+        start, goal = to_grid(p1), to_grid(p2)
+        if start in obstacle_cells:
+            obstacle_cells.remove(start)
+        if goal in obstacle_cells:
+            obstacle_cells.remove(goal)
+
+        # A*.
+        open_set = [(0.0, start)]
+        came_from = {}
+        g_score = {start: 0.0}
+        f_score = {start: math.hypot(goal[0] - start[0], goal[1] - start[1])}
+        visited = set()
+        while open_set:
+            _, current = heapq.heappop(open_set)
+            if current == goal:
+                path = [current]
+                while current in came_from:
+                    current = came_from[current]
+                    path.append(current)
+                path.reverse()
+                return [p1] + [to_world(g) for g in path[1:]]
+            if current in visited:
+                continue
+            visited.add(current)
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                nx, ny = current[0] + dx, current[1] + dy
+                if nx < 0 or nx >= cols or ny < 0 or ny >= rows:
+                    continue
+                if (nx, ny) in obstacle_cells:
+                    continue
+                neighbor = (nx, ny)
+                move_cost = math.hypot(dx, dy)
+                tentative = g_score[current] + move_cost
+                if tentative < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative
+                    f_score[neighbor] = tentative + math.hypot(goal[0] - nx, goal[1] - ny)
+                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+
+        # Fallback: straight line if A* fails.
+        return [p1, p2]
+
     def _interpolate(self, waypoints: List[tuple], step: float = STEP_SIZE) -> List[tuple]:
-        pts = [waypoints[0]]
+        # Build an obstacle-avoiding polyline through the waypoints.
+        routed = [waypoints[0]]
         for (x1, y1), (x2, y2) in zip(waypoints, waypoints[1:]):
+            routed.extend(self._route_segment((x1, y1), (x2, y2))[1:])
+
+        # Densify the polyline into small steps.
+        pts = [routed[0]]
+        for (x1, y1), (x2, y2) in zip(routed, routed[1:]):
             dx, dy = x2 - x1, y2 - y1
             dist = math.hypot(dx, dy)
             if dist == 0:
@@ -146,8 +240,7 @@ class Simulator:
             n = max(1, int(dist / step))
             for k in range(1, n + 1):
                 t = k / n
-                pts.append((x1 + dx * t, y2 - (y2 - y1) * (1 - t)))
-            pts.append((x2, y2))
+                pts.append((x1 + dx * t, y1 + dy * t))
         return pts
 
     def _log(self, event_type: str, text: str) -> None:
