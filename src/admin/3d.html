@@ -122,19 +122,48 @@
     // Exponential fog for depth
     scene.fog = new THREE.FogExp2(0x12182e, 0.0008);
 
-    // --- Ground / grid ---
+    // --- Tactical ground texture ---
+    function createGroundTexture() {
+      const size = 1024;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      // Base
+      ctx.fillStyle = '#1a2035';
+      ctx.fillRect(0, 0, size, size);\n      // Noise
+      for (let i = 0; i < 4000; i++) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.03})`;
+        ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+      }
+      // Grid
+      ctx.strokeStyle = 'rgba(100,130,180,0.12)';
+      ctx.lineWidth = 1;
+      const step = size / 20;
+      for (let i = 0; i <= size; i += step) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, size); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(size, i); ctx.stroke();
+      }
+      // Border
+      ctx.strokeStyle = 'rgba(0,240,255,0.25)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(0, 0, size, size);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    }
+
     const groundGeo = new THREE.PlaneGeometry(1000, 800);
-    const groundMat = new THREE.MeshStandardMaterial({ color: 0x0F1629, roughness: 0.9 });
+    const groundMat = new THREE.MeshStandardMaterial({
+      map: createGroundTexture(),
+      roughness: 0.95,
+      metalness: 0.05
+    });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.set(500, 0, 400);
+    ground.position.set(500, -0.1, 400);
     ground.receiveShadow = true;
     scene.add(ground);
-
-    const grid = new THREE.GridHelper(1000, 20, 0x1E2A4A, 0x1E2A4A);
-    grid.position.set(500, 0.2, 400);
-    grid.scale.z = 0.8;
-    scene.add(grid);
 
     // --- Mesh buildings (readable transparent boxes + wireframe) ---
     const buildingColors = [0x8a9199, 0x7d858d, 0x9299a1, 0x848c94, 0x7a828a];
@@ -172,12 +201,44 @@
 
         // Flat roof (slightly overhanging, solid)
         const roofGeo = new THREE.BoxGeometry(b.w + 4, 1.5, b.h + 4);
-        const roofMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.9 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.85 });
         const roof = new THREE.Mesh(roofGeo, roofMat);
         roof.position.set(cx, height + 0.75, cz);
         roof.castShadow = true;
         roof.receiveShadow = true;
         scene.add(roof);
+
+        // Windows / doors detail
+        const windowMat = new THREE.MeshBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.35 });
+        const windowW = Math.min(14, b.w * 0.25);
+        const windowH = Math.min(12, height * 0.35);
+        const windowsX = Math.floor(b.w / 25);
+        const windowsZ = Math.floor(b.h / 25);
+        for (let wx = 0; wx < windowsX; wx++) {
+          const wxPos = b.x + 2 + (wx + 0.5) * (b.w - 4) / windowsX;
+          // Front windows
+          const winF = new THREE.Mesh(new THREE.PlaneGeometry(windowW, windowH), windowMat);
+          winF.position.set(wxPos, height * 0.55, b.y + b.h + 0.5);
+          winF.rotation.y = Math.PI;
+          scene.add(winF);
+          // Back windows
+          const winB = new THREE.Mesh(new THREE.PlaneGeometry(windowW, windowH), windowMat);
+          winB.position.set(wxPos, height * 0.55, b.y - 0.5);
+          scene.add(winB);
+        }
+        for (let wz = 0; wz < windowsZ; wz++) {
+          const wzPos = b.y + 2 + (wz + 0.5) * (b.h - 4) / windowsZ;
+          // Left windows
+          const winL = new THREE.Mesh(new THREE.PlaneGeometry(windowW, windowH), windowMat);
+          winL.position.set(b.x - 0.5, height * 0.55, wzPos);
+          winL.rotation.y = -Math.PI / 2;
+          scene.add(winL);
+          // Right windows
+          const winR = new THREE.Mesh(new THREE.PlaneGeometry(windowW, windowH), windowMat);
+          winR.position.set(b.x + b.w + 0.5, height * 0.55, wzPos);
+          winR.rotation.y = Math.PI / 2;
+          scene.add(winR);
+        }
 
         // Building label sprite
         const canvas = document.createElement('canvas');
@@ -204,6 +265,7 @@
     let state = null;
     const agentMeshes = {};
     const fovMeshes = {};
+    const agentTrails = {};
     const alertMarkers = [];
     const coverageGroup = new THREE.Group();
     scene.add(coverageGroup);
@@ -213,42 +275,55 @@
     function createAgent(a) {
       const group = new THREE.Group();
       const color = new THREE.Color(a.color);
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+      const armorMat = new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.25, roughness: 0.6 });
 
-      // Robot body (glowing box)
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(6, 4, 8),
-        new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.5 })
-      );
-      body.position.y = 3;
-      body.castShadow = true;
-      group.add(body);
+      // Humanoid: torso
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(3.5, 5, 2.5), armorMat);
+      torso.position.y = 6.5;
+      torso.castShadow = true;
+      group.add(torso);
 
-      // 4 legs
-      const legMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
-      const legGeo = new THREE.BoxGeometry(1, 3, 1);
-      const legPositions = [[-2.5, 1.5, -3.5], [2.5, 1.5, -3.5], [-2.5, 1.5, 3.5], [2.5, 1.5, 3.5]];
-      legPositions.forEach(pos => {
-        const leg = new THREE.Mesh(legGeo, legMat);
-        leg.position.set(...pos);
-        group.add(leg);
-      });
+      // Head
+      const head = new THREE.Mesh(new THREE.SphereGeometry(1.6, 16, 16), darkMat);
+      head.position.y = 10;
+      group.add(head);
 
-      // Direction arrow / antenna
-      const arrow = new THREE.Mesh(
-        new THREE.ConeGeometry(2.5, 8, 16),
-        new THREE.MeshBasicMaterial({ color: 0xffffff })
-      );
-      arrow.geometry.rotateX(Math.PI / 2);
-      arrow.position.set(0, 3, 10);
-      group.add(arrow);
+      // Helmet glow strip
+      const visor = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 1.2), new THREE.MeshBasicMaterial({ color: color }));
+      visor.position.set(0, 10, 1.2);
+      group.add(visor);
 
-      // Glowing ring on ground
+      // Weapon barrel (shows facing direction)
+      const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 7), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+      weapon.position.set(1.2, 6, 4);
+      group.add(weapon);
+
+      // Shoulders / arms
+      const armGeo = new THREE.BoxGeometry(1.2, 4, 1.2);
+      const leftArm = new THREE.Mesh(armGeo, darkMat);
+      leftArm.position.set(-2.4, 7, 0.5);
+      group.add(leftArm);
+      const rightArm = new THREE.Mesh(armGeo, darkMat);
+      rightArm.position.set(2.4, 7, 0.5);
+      group.add(rightArm);
+
+      // Legs
+      const legGeo = new THREE.BoxGeometry(1.3, 5, 1.5);
+      const leftLeg = new THREE.Mesh(legGeo, darkMat);
+      leftLeg.position.set(-1.1, 2.5, 0);
+      group.add(leftLeg);
+      const rightLeg = new THREE.Mesh(legGeo, darkMat);
+      rightLeg.position.set(1.1, 2.5, 0);
+      group.add(rightLeg);
+
+      // Selection ring on ground
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(8, 10, 32),
-        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
+        new THREE.RingGeometry(4, 5, 32),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
       );
       ring.rotation.x = -Math.PI / 2;
-      ring.position.y = 0.2;
+      ring.position.y = 0.1;
       ring.name = 'ring';
       group.add(ring);
 
@@ -267,19 +342,45 @@
       scene.add(group);
       agentMeshes[a.id] = group;
 
-      const fovGeo = new THREE.ConeGeometry(70, 90, 32, 1, true);
-      fovGeo.rotateX(-Math.PI / 2);
-      fovGeo.translate(0, 0, 45);
+      // Vision wedge: flat projected cone on ground + faint vertical fan
+      const fovLen = 110, fovHalfAngle = Math.PI / 6; // 60° total
+      const fovShape = new THREE.Shape();
+      fovShape.moveTo(0, 0);
+      fovShape.lineTo(Math.sin(-fovHalfAngle) * fovLen, Math.cos(-fovHalfAngle) * fovLen);
+      fovShape.absarc(0, 0, fovLen, -Math.PI / 2 + fovHalfAngle, -Math.PI / 2 - fovHalfAngle, true);
+      fovShape.lineTo(0, 0);
+      const fovGeo = new THREE.ShapeGeometry(fovShape);
       const fovMat = new THREE.MeshBasicMaterial({
         color: color,
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.18,
         side: THREE.DoubleSide,
         depthWrite: false
       });
       const fov = new THREE.Mesh(fovGeo, fovMat);
+      fov.rotation.x = -Math.PI / 2;
+      fov.position.y = 1.0;
       scene.add(fov);
-      fovMeshes[a.id] = fov;
+
+      // Center laser line
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0.5, 0),
+        new THREE.Vector3(0, 0.5, fovLen)
+      ]);
+      const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.5 }));
+      scene.add(line);
+
+      fovMeshes[a.id] = { fov, line };
+
+      // Trail line (recent path)
+      const trailGeo = new THREE.BufferGeometry();
+      const trailPos = new Float32Array(30 * 3);
+      trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+      const trailMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.4 });
+      const trail = new THREE.Line(trailGeo, trailMat);
+      trail.frustumCulled = false;
+      scene.add(trail);
+      agentTrails[a.id] = { mesh: trail, positions: [] };
     }
 
     function updateAgent(a, time) {
@@ -296,9 +397,24 @@
         ring.scale.setScalar(s);
       }
 
-      const fov = fovMeshes[a.id];
-      fov.position.set(x, 12, z);
-      fov.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+      const fm = fovMeshes[a.id];
+      fm.fov.position.set(x, 1.5, z);
+      fm.fov.rotation.z = -THREE.MathUtils.degToRad(pos.angle);
+      fm.line.position.set(x, 1.5, z);
+      fm.line.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+
+      // Update trail
+      const trail = agentTrails[a.id];
+      trail.positions.push(new THREE.Vector3(x, 1, z));
+      if (trail.positions.length > 30) trail.positions.shift();
+      const arr = trail.mesh.geometry.attributes.position.array;
+      for (let i = 0; i < 30; i++) {
+        const p = trail.positions[i] || trail.positions[trail.positions.length - 1];
+        arr[i * 3] = p.x;
+        arr[i * 3 + 1] = p.y;
+        arr[i * 3 + 2] = p.z;
+      }
+      trail.mesh.geometry.attributes.position.needsUpdate = true;
 
       if (a.status === 'THREAT') {
         const alertRing = new THREE.Mesh(
