@@ -316,8 +316,8 @@
     function createAgent(a) {
       const group = new THREE.Group();
       const color = new THREE.Color(a.color);
-      const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
-      const armorMat = new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.25, roughness: 0.6 });
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.8 });
+      const armorMat = new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.7, roughness: 0.5 });
 
       // Humanoid: torso
       const torso = new THREE.Mesh(new THREE.BoxGeometry(3.5, 5, 2.5), armorMat);
@@ -382,9 +382,22 @@
       sprite.scale.set(50, 12, 1);
       group.add(sprite);
 
-      group.scale.set(1.8, 1.8, 1.8);
+      group.scale.set(2.5, 2.5, 2.5);
       scene.add(group);
       agentMeshes[a.id] = group;
+
+      // Point light above agent for visibility
+      const agentLight = new THREE.PointLight(color, 0.8, 40);
+      agentLight.position.set(0, 18, 0);
+      group.add(agentLight);
+
+      // Vertical beacon pillar
+      const beaconGeo = new THREE.CylinderGeometry(0.3, 0.3, 25, 8);
+      const beaconMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.15 });
+      const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+      beacon.position.y = 12.5;
+      beacon.name = 'beacon';
+      group.add(beacon);
 
       // Outer glowing selection ring
       const glowRing = new THREE.Mesh(
