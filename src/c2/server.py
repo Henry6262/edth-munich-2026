@@ -33,6 +33,8 @@ MAP_W, MAP_H = 4200, 3200
 FOV_R = 170
 FOV_DEG = 90
 STEP_SIZE = 10.0
+EXPLORE_THRESHOLD = 90.0
+SURVEIL_THRESHOLD = 90.0
 
 AGENT_COLORS = {
     "A-1": "#00FF88",
@@ -106,6 +108,7 @@ class SimState:
     threat_triggered: bool = False
     change_triggered: bool = False
     recon_scheduled: bool = False
+    recon_started_at: float = 0.0
     recon_finish_at: float = 0.0
 
 
@@ -339,6 +342,7 @@ class Simulator:
             elif cmd == "RECON":
                 self.state.mode = "RECON"
                 self.state.recon_scheduled = True
+                self.state.recon_started_at = self.state.mission_time
                 self.state.recon_finish_at = self.state.mission_time + 20
                 for a in self.state.agents:
                     a.status = "PATROLLING"
@@ -357,6 +361,48 @@ class Simulator:
                     self._log("CMD", f"DEPLOY ordered for {agent_id}")
             elif cmd == "MARK":
                 self._log("CMD", f"MARK location for {agent_id or 'sector'}")
+
+    def _challenge_goals(self) -> dict:
+        recon_window = max(1.0, self.state.recon_finish_at - self.state.recon_started_at)
+        if self.state.change_triggered:
+            surveil_pct = SURVEIL_THRESHOLD
+        elif self.state.recon_scheduled:
+            recon_progress = (self.state.mission_time - self.state.recon_started_at) / recon_window
+            surveil_pct = min(SURVEIL_THRESHOLD, max(0.0, recon_progress * SURVEIL_THRESHOLD))
+        else:
+            surveil_pct = 0.0
+
+        ats_phase = "SURVEIL" if self.state.mode == "RECON" or self.state.change_triggered else "EXPLORE"
+        if self.state.change_triggered:
+            se3_status = "CHANGE DETECTED"
+        elif self.state.recon_scheduled:
+            se3_status = "SECOND PASS RUNNING"
+        else:
+            se3_status = "READY FOR SECOND PASS"
+
+        return {
+            "ats": {
+                "name": "01-ats",
+                "title": "3D Graph Exploration & Surveillance",
+                "phase": ats_phase,
+                "explore_threshold": EXPLORE_THRESHOLD,
+                "surveil_threshold": SURVEIL_THRESHOLD,
+                "explore_pct": self.state.coverage_pct,
+                "surveil_pct": round(surveil_pct, 1),
+                "achieved": self.state.coverage_pct >= EXPLORE_THRESHOLD and surveil_pct >= SURVEIL_THRESHOLD,
+                "proof": "5 agents observe the unknown zone, then run a second re-observation sweep.",
+            },
+            "se3": {
+                "name": "01-se3",
+                "title": "Tactical Intelligence from Live 3D Battlefield Reconstruction",
+                "track": "Track 2 change detection + 3D map intelligence layer",
+                "status": se3_status,
+                "point_cloud": "point_cloud_demo.ply",
+                "changes_detected": len(self.state.change_log),
+                "achieved": self.state.change_triggered,
+                "proof": "The reconstructed battlefield becomes an operator map with threat and change alerts.",
+            },
+        }
 
     def get_state(self) -> dict:
         with self.lock:
@@ -385,6 +431,7 @@ class Simulator:
                 "alerts": list(self.state.alerts),
                 "mission_log": list(self.state.mission_log),
                 "change_log": list(self.state.change_log),
+                "challenge_goals": self._challenge_goals(),
             }
 
 

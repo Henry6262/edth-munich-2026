@@ -41,6 +41,17 @@
     .bar-fill { height: 100%; background: var(--green); width: 0%; transition: width 0.3s; }
     .section { margin-bottom: 16px; }
     .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .goal-grid { display: grid; gap: 8px; margin-bottom: 16px; }
+    .goal-card { background: var(--elevated); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .goal-card.done { border-color: var(--green); box-shadow: inset 0 0 0 1px rgba(0,255,136,0.18); }
+    .goal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .goal-name { color: var(--cyan); font-weight: 800; font-size: 12px; letter-spacing: 0.8px; text-transform: uppercase; }
+    .goal-state { color: var(--yellow); font-size: 10px; font-weight: 800; letter-spacing: 0.8px; text-transform: uppercase; }
+    .goal-card.done .goal-state { color: var(--green); }
+    .goal-title { font-size: 13px; font-weight: 700; line-height: 1.25; margin-bottom: 8px; }
+    .goal-proof { color: var(--muted); font-size: 11px; line-height: 1.35; margin-top: 7px; }
+    .metric-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 5px; }
+    .metric-row strong { color: var(--text); }
     .alert-item { background: var(--elevated); border-left: 4px solid var(--red); padding: 8px; border-radius: 4px; margin-bottom: 6px; font-size: 13px; }
     .alert-item.change { border-color: var(--yellow); }
     button { width: 100%; background: var(--elevated); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 8px; font-size: 14px; cursor: pointer; }
@@ -76,6 +87,10 @@
     <div class="sidebar">
       <h2>SQUAD STATUS</h2>
       <div class="squad" id="squad"></div>
+      <div class="section">
+        <div class="section-title">Challenge Goals / Achieved</div>
+        <div class="goal-grid" id="challenge-goals"></div>
+      </div>
       <div class="coverage">
         <div class="section-title">Coverage <span id="cov-pct">0%</span></div>
         <div class="bar"><div class="bar-fill" id="cov-bar"></div></div>
@@ -86,6 +101,7 @@
       </div>
       <div class="section">
         <div class="section-title">Command Actions</div>
+        <button onclick="location.href='/3d'">OPEN 3D ADMIN MAP</button>
         <button class="primary" onclick="send('DEPLOY','A-3')">DEPLOY TO A-3</button>
         <button onclick="send('RECON')">RECON SWEEP ALL</button>
         <button class="danger" onclick="send('RECALL')">EMERGENCY RECALL</button>
@@ -95,6 +111,8 @@
   <script>
     const canvas = document.getElementById('map');
     const ctx = canvas.getContext('2d');
+    const MAP_W = 4200;
+    const MAP_H = 3200;
     let state = null;
     let coveragePoints = [];
 
@@ -106,8 +124,10 @@
     window.addEventListener('resize', resize);
     resize();
 
-    function sx(x) { return (x / 1000) * canvas.width; }
-    function sy(y) { return canvas.height - (y / 800) * canvas.height; }
+    function sx(x) { return (x / MAP_W) * canvas.width; }
+    function sy(y) { return canvas.height - (y / MAP_H) * canvas.height; }
+    function sw(w) { return (w / MAP_W) * canvas.width; }
+    function sh(h) { return (h / MAP_H) * canvas.height; }
 
     function drawMap() {
       ctx.fillStyle = '#0A0E1A';
@@ -118,8 +138,8 @@
       ctx.strokeStyle = '#1E2A4A';
       ctx.lineWidth = 1;
       for (let i = 0; i <= 10; i++) {
-        ctx.beginPath(); ctx.moveTo(sx(i * 100), 0); ctx.lineTo(sx(i * 100), canvas.height); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, sy(i * 80)); ctx.lineTo(canvas.width, sy(i * 80)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(sx((MAP_W / 10) * i), 0); ctx.lineTo(sx((MAP_W / 10) * i), canvas.height); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, sy((MAP_H / 10) * i)); ctx.lineTo(canvas.width, sy((MAP_H / 10) * i)); ctx.stroke();
       }
 
       // roads
@@ -128,7 +148,7 @@
       state.roads.forEach(road => {
         ctx.beginPath();
         ctx.moveTo(sx(road[0][0]), sy(road[0][1]));
-        ctx.lineTo(sx(road[1][0]), sy(road[1][1]));
+        for (let i = 1; i < road.length; i++) ctx.lineTo(sx(road[i][0]), sy(road[i][1]));
         ctx.stroke();
       });
 
@@ -137,8 +157,8 @@
         ctx.fillStyle = '#3a3f4e';
         ctx.strokeStyle = '#1E2A4A';
         ctx.lineWidth = 2;
-        ctx.fillRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
-        ctx.strokeRect(sx(b.x), sy(b.y + b.h), sx(b.w) - sx(0), sy(0) - sy(b.h));
+        ctx.fillRect(sx(b.x), sy(b.y + b.h), sw(b.w), sh(b.h));
+        ctx.strokeRect(sx(b.x), sy(b.y + b.h), sw(b.w), sh(b.h));
         ctx.fillStyle = '#6B7A9C';
         ctx.font = '12px Inter';
         ctx.fillText(b.id, sx(b.x + b.w / 2) - 8, sy(b.y + b.h / 2));
@@ -147,7 +167,7 @@
       // coverage circles
       ctx.fillStyle = 'rgba(0, 255, 136, 0.15)';
       coveragePoints.forEach(p => {
-        const r = sx(20) - sx(0);
+        const r = sw(state.agents?.[0]?.fov?.range || 170);
         ctx.beginPath();
         ctx.arc(sx(p.x), sy(p.y), r, 0, Math.PI * 2);
         ctx.fill();
@@ -163,7 +183,7 @@
         ctx.moveTo(x, y);
         const rad = Math.PI / 180;
         const a1 = (a.position.angle - 45) * rad, a2 = (a.position.angle + 45) * rad;
-        const rr = sx(90) - sx(0);
+        const rr = sw(a.fov?.range || 170);
         ctx.arc(x, y, rr, -a2, -a1);
         ctx.closePath();
         ctx.fill();
@@ -190,7 +210,7 @@
 
       // alert markers
       state.alerts.forEach(al => {
-        const b = state.buildings.find(b => al.location.includes(b.id));
+        const b = buildingForLocation(al.location);
         if (!b) return;
         const x = sx(b.x + b.w / 2), y = sy(b.y + b.h / 2);
         ctx.fillStyle = al.type === 'THREAT' ? '#FF3366' : '#FFCC00';
@@ -200,12 +220,46 @@
       });
     }
 
+    function buildingForLocation(location) {
+      const id = String(location || '').match(/(?:Building|B)\s*-?\s*(\d+)/i)?.[1];
+      if (!id) return null;
+      return state.buildings.find(b => b.id === `B${id}` || b.id === id);
+    }
+
+    function renderChallengeGoals() {
+      const mount = document.getElementById('challenge-goals');
+      const goals = state?.challenge_goals;
+      if (!goals) {
+        mount.innerHTML = '<div style="color:var(--muted);font-size:12px">Waiting for challenge telemetry.</div>';
+        return;
+      }
+      const ats = goals.ats;
+      const se3 = goals.se3;
+      mount.innerHTML = `
+        <div class="goal-card ${ats.achieved ? 'done' : ''}">
+          <div class="goal-head"><div class="goal-name">${ats.name}</div><div class="goal-state">${ats.achieved ? 'ACHIEVED' : ats.phase}</div></div>
+          <div class="goal-title">${ats.title}</div>
+          <div class="metric-row"><span>Explore observed</span><strong>${Number(ats.explore_pct || 0).toFixed(1)}% / ${ats.explore_threshold}%</strong></div>
+          <div class="metric-row"><span>Surveil sweep</span><strong>${Number(ats.surveil_pct || 0).toFixed(1)}% / ${ats.surveil_threshold}%</strong></div>
+          <div class="goal-proof">${ats.proof}</div>
+        </div>
+        <div class="goal-card ${se3.achieved ? 'done' : ''}">
+          <div class="goal-head"><div class="goal-name">${se3.name}</div><div class="goal-state">${se3.achieved ? 'ACHIEVED' : se3.status}</div></div>
+          <div class="goal-title">${se3.title}</div>
+          <div class="metric-row"><span>Track</span><strong>${se3.track}</strong></div>
+          <div class="metric-row"><span>Changes found</span><strong>${se3.changes_detected}</strong></div>
+          <div class="goal-proof">${se3.proof}</div>
+        </div>
+      `;
+    }
+
     function render() {
       drawMap();
       if (!state) return;
       document.getElementById('clock').textContent = state.mission_time;
       document.getElementById('cov-pct').textContent = state.coverage_pct + '%';
       document.getElementById('cov-bar').style.width = state.coverage_pct + '%';
+      renderChallengeGoals();
 
       const squad = document.getElementById('squad');
       squad.innerHTML = '';

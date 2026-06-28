@@ -28,9 +28,18 @@ interface MissionState {
   mission_time: string
   coverage_pct: number
   agents: AgentData[]
-  alerts: any[]
+  alerts: AlertData[]
   buildings: { id: string; x: number; y: number; w: number; h: number }[]
   roads: [number, number][][]
+}
+
+interface AlertData {
+  type: 'THREAT' | 'CHANGE' | string
+  agent: string
+  location: string
+  detail?: string
+  confidence?: number
+  time?: string
 }
 
 interface AgentView {
@@ -220,6 +229,7 @@ export class TacticalMap3D {
   private coveragePlane?: THREE.Mesh
   private coverageCtx?: CanvasRenderingContext2D
   private coverageTex?: THREE.CanvasTexture
+  private alertMarkers: THREE.Group[] = []
   private pressedKeys = new Set<string>()
 
   constructor(container: HTMLElement) {
@@ -257,6 +267,7 @@ export class TacticalMap3D {
     this.setupLights()
     this.createGround()
     this.createRoads()
+    this.createTerrainDetail()
     this.createCoveragePlane()
     this.loadAssets().then(() => this.buildScene())
 
@@ -317,58 +328,26 @@ export class TacticalMap3D {
   }
 
   private createGround() {
-    const size = 1024
-    const canvas = document.createElement('canvas')
-    canvas.width = canvas.height = size
-    const ctx = canvas.getContext('2d')!
-    // Ukrainian mud / late-winter dirt base
-    ctx.fillStyle = '#4a453d'
-    ctx.fillRect(0, 0, size, size)
-    // mottled mud patches
-    for (let i = 0; i < 8000; i++) {
-      const v = 55 + Math.random() * 45
-      ctx.fillStyle = `rgba(${v + 10},${v + 5},${v},${0.12 + Math.random() * 0.12})`
-      ctx.fillRect(Math.random() * size, Math.random() * size, 3 + Math.random() * 8, 2 + Math.random() * 6)
-    }
-    // sparse dead grass tufts
-    for (let i = 0; i < 1500; i++) {
-      const g = 70 + Math.random() * 30
-      ctx.fillStyle = `rgba(${g + 15},${g + 20},${g},${0.1 + Math.random() * 0.1})`
-      ctx.fillRect(Math.random() * size, Math.random() * size, 2 + Math.random() * 4, 1 + Math.random() * 3)
-    }
-    // dirt tracks / ruts
-    for (let i = 0; i < 10; i++) {
-      ctx.strokeStyle = `rgba(55,50,42,${0.08 + Math.random() * 0.08})`
-      ctx.lineWidth = 12 + Math.random() * 30
-      ctx.beginPath()
-      ctx.moveTo(Math.random() * size, Math.random() * size)
-      ctx.bezierCurveTo(Math.random() * size, Math.random() * size, Math.random() * size, Math.random() * size, Math.random() * size, Math.random() * size)
-      ctx.stroke()
-    }
-    // puddles
-    for (let i = 0; i < 8; i++) {
-      ctx.fillStyle = `rgba(90,100,110,${0.15 + Math.random() * 0.1})`
-      ctx.beginPath()
-      ctx.ellipse(Math.random() * size, Math.random() * size, 20 + Math.random() * 50, 10 + Math.random() * 30, Math.random() * Math.PI, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    // map border
-    ctx.strokeStyle = 'rgba(220,230,240,0.15)'
-    ctx.lineWidth = 4
-    ctx.strokeRect(2, 2, size - 4, size - 4)
-
-    const tex = new THREE.CanvasTexture(canvas)
-    tex.wrapS = THREE.RepeatWrapping
-    tex.wrapT = THREE.RepeatWrapping
-    tex.repeat.set(7, 5)
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(MAP_W, MAP_H),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 })
+      new THREE.MeshStandardMaterial({
+        color: 0x2f3a35,
+        roughness: 1,
+        metalness: 0,
+      })
     )
     ground.rotation.x = -Math.PI / 2
     ground.position.set(MAP_W / 2, -0.2, MAP_H / 2)
     ground.receiveShadow = true
     this.world.add(ground)
+
+    const grid = new THREE.GridHelper(Math.max(MAP_W, MAP_H), 42, 0x93a4a8, 0x536365)
+    grid.position.set(MAP_W / 2, -0.08, MAP_H / 2)
+    const gridMat = grid.material as THREE.Material
+    gridMat.transparent = true
+    gridMat.opacity = 0.11
+    gridMat.depthWrite = false
+    this.world.add(grid)
   }
 
   private createRoads() {
@@ -378,6 +357,10 @@ export class TacticalMap3D {
       metalness: 0,
       transparent: true,
       opacity: 0.82,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     })
 
     const makeSegment = (x1: number, z1: number, x2: number, z2: number, width: number) => {
@@ -392,10 +375,10 @@ export class TacticalMap3D {
         'position',
         new THREE.Float32BufferAttribute(
           [
-            x1 + px, 0.03, z1 + pz,
-            x1 - px, 0.03, z1 - pz,
-            x2 + px, 0.03, z2 + pz,
-            x2 - px, 0.03, z2 - pz,
+            x1 + px, 0.08, z1 + pz,
+            x1 - px, 0.08, z1 - pz,
+            x2 + px, 0.08, z2 + pz,
+            x2 - px, 0.08, z2 - pz,
           ],
           3
         )
@@ -404,6 +387,7 @@ export class TacticalMap3D {
       geo.computeVertexNormals()
       const road = new THREE.Mesh(geo, mat)
       road.receiveShadow = false
+      road.renderOrder = 2
       this.world.add(road)
     }
 
@@ -413,6 +397,138 @@ export class TacticalMap3D {
         makeSegment(road[i][0], road[i][1], road[i + 1][0], road[i + 1][1], width)
       }
     })
+  }
+
+  private createTerrainDetail() {
+    const patchMats = [
+      new THREE.MeshBasicMaterial({ color: 0x203a32, transparent: true, opacity: 0.68, depthWrite: false, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color: 0x263f2f, transparent: true, opacity: 0.58, depthWrite: false, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color: 0x4b4a38, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide }),
+    ]
+    const patchSpecs = [
+      { x: 360, z: 340, rx: 560, rz: 300, rot: 0.35, mat: 0 },
+      { x: 860, z: 2860, rx: 690, rz: 340, rot: -0.25, mat: 1 },
+      { x: 3680, z: 520, rx: 540, rz: 280, rot: -0.38, mat: 0 },
+      { x: 3620, z: 2680, rx: 660, rz: 360, rot: 0.22, mat: 1 },
+      { x: 430, z: 1740, rx: 380, rz: 620, rot: 0.08, mat: 0 },
+      { x: 3900, z: 1600, rx: 380, rz: 590, rot: -0.08, mat: 0 },
+      { x: 1640, z: 2920, rx: 760, rz: 190, rot: 0.06, mat: 2 },
+      { x: 2820, z: 260, rx: 720, rz: 190, rot: -0.04, mat: 2 },
+    ]
+
+    patchSpecs.forEach((spec, idx) => {
+      const patch = new THREE.Mesh(new THREE.CircleGeometry(1, 48), patchMats[spec.mat])
+      patch.rotation.x = -Math.PI / 2
+      patch.rotation.z = spec.rot
+      patch.position.set(spec.x, -0.11 - idx * 0.002, spec.z)
+      patch.scale.set(spec.rx, spec.rz, 1)
+      patch.renderOrder = 1
+      this.world.add(patch)
+    })
+
+    const trunkGeo = new THREE.CylinderGeometry(4.5, 7, 42, 6)
+    const canopyGeo = new THREE.ConeGeometry(32, 82, 8)
+    const underbrushGeo = new THREE.ConeGeometry(15, 28, 7)
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x493522, roughness: 1, metalness: 0 })
+    const canopyMats = [
+      new THREE.MeshStandardMaterial({ color: 0x1c4a34, roughness: 0.95, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: 0x24573c, roughness: 0.95, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: 0x2f6344, roughness: 0.95, metalness: 0 }),
+    ]
+
+    const isBlocked = (x: number, z: number) => {
+      const nearBuilding = BUILDINGS.some((b) => x > b.x - 190 && x < b.x + b.w + 190 && z > b.y - 190 && z < b.y + b.h + 190)
+      const nearRoad = ROADS.some((road) => {
+        for (let i = 0; i < road.length - 1; i++) {
+          const [x1, z1] = road[i]
+          const [x2, z2] = road[i + 1]
+          const dx = x2 - x1
+          const dz = z2 - z1
+          const lenSq = dx * dx + dz * dz
+          if (lenSq <= 0) continue
+          const t = THREE.MathUtils.clamp(((x - x1) * dx + (z - z1) * dz) / lenSq, 0, 1)
+          const px = x1 + dx * t
+          const pz = z1 + dz * t
+          if (Math.hypot(x - px, z - pz) < 92) return true
+        }
+        return false
+      })
+      return nearBuilding || nearRoad
+    }
+
+    const addTree = (x: number, z: number, scale: number, matIdx: number, rot: number) => {
+      const group = new THREE.Group()
+      const trunk = new THREE.Mesh(trunkGeo, trunkMat)
+      trunk.position.y = 21 * scale
+      trunk.castShadow = true
+      trunk.receiveShadow = true
+      group.add(trunk)
+
+      const canopy = new THREE.Mesh(canopyGeo, canopyMats[matIdx % canopyMats.length])
+      canopy.position.y = 77 * scale
+      canopy.castShadow = true
+      canopy.receiveShadow = true
+      group.add(canopy)
+
+      if (scale > 1.05) {
+        const lowerCanopy = new THREE.Mesh(canopyGeo, canopyMats[(matIdx + 1) % canopyMats.length])
+        lowerCanopy.position.y = 54 * scale
+        lowerCanopy.scale.setScalar(0.72)
+        lowerCanopy.castShadow = true
+        lowerCanopy.receiveShadow = true
+        group.add(lowerCanopy)
+      }
+
+      group.position.set(x, 0, z)
+      group.rotation.y = rot
+      group.scale.setScalar(scale)
+      this.world.add(group)
+    }
+
+    const addBrush = (x: number, z: number, scale: number, matIdx: number) => {
+      const brush = new THREE.Mesh(underbrushGeo, canopyMats[matIdx % canopyMats.length])
+      brush.position.set(x, 14 * scale, z)
+      brush.scale.setScalar(scale)
+      brush.rotation.y = matIdx * 0.7
+      brush.castShadow = false
+      brush.receiveShadow = true
+      this.world.add(brush)
+    }
+
+    const addCluster = (cx: number, zc: number, count: number, rx: number, rz: number, seed: number) => {
+      let s = seed >>> 0
+      const next = () => {
+        s = (s * 1664525 + 1013904223) >>> 0
+        return s / 4294967296
+      }
+
+      for (let i = 0; i < count; i++) {
+        const angle = next() * Math.PI * 2
+        const radius = Math.sqrt(next())
+        const x = cx + Math.cos(angle) * radius * rx
+        const z = zc + Math.sin(angle) * radius * rz
+        if (x < -70 || x > MAP_W + 70 || z < -70 || z > MAP_H + 70 || isBlocked(x, z)) continue
+
+        const scale = 0.72 + next() * 0.68
+        const matIdx = Math.floor(next() * canopyMats.length)
+        addTree(x, z, scale, matIdx, next() * Math.PI * 2)
+
+        if (next() > 0.58) {
+          addBrush(x + (next() - 0.5) * 52, z + (next() - 0.5) * 52, 0.65 + next() * 0.45, matIdx + 1)
+        }
+      }
+    }
+
+    addCluster(320, 300, 22, 440, 250, 12)
+    addCluster(610, 2860, 24, 560, 270, 34)
+    addCluster(3820, 410, 20, 430, 240, 56)
+    addCluster(3820, 2800, 26, 510, 290, 78)
+    addCluster(260, 1650, 28, 220, 780, 91)
+    addCluster(3980, 1640, 25, 240, 700, 123)
+    addCluster(1600, 3040, 16, 780, 120, 145)
+    addCluster(2830, 160, 16, 760, 120, 167)
+    addCluster(1180, 840, 10, 260, 160, 189)
+    addCluster(3040, 2240, 12, 320, 170, 211)
   }
 
   private createCoveragePlane() {
@@ -431,7 +547,8 @@ export class TacticalMap3D {
       new THREE.MeshBasicMaterial({ map: this.coverageTex, transparent: true, opacity: 0.28, depthWrite: false })
     )
     plane.rotation.x = -Math.PI / 2
-    plane.position.set(MAP_W / 2, 0.05, MAP_H / 2)
+    plane.position.set(MAP_W / 2, 0.42, MAP_H / 2)
+    plane.renderOrder = 5
     this.world.add(plane)
     this.coveragePlane = plane
   }
@@ -455,6 +572,87 @@ export class TacticalMap3D {
       ctx.fill()
     }
     if (this.coverageTex) this.coverageTex.needsUpdate = true
+  }
+
+  private buildingForAlert(alert: AlertData) {
+    const match = alert.location?.match(/(?:Building|B)\s*-?\s*(\d+)/i)
+    if (!match) return null
+    return BUILDINGS.find((b) => b.id === `B${match[1]}` || b.id === match[1]) ?? null
+  }
+
+  private makeAlertSprite(alert: AlertData) {
+    const isChange = alert.type === 'CHANGE'
+    const color = isChange ? '#ffcc00' : '#ff3366'
+    const canvas = document.createElement('canvas')
+    canvas.width = 320
+    canvas.height = 96
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = 'rgba(10,14,26,0.82)'
+    ctx.roundRect(8, 10, 304, 76, 10)
+    ctx.fill()
+    ctx.strokeStyle = color
+    ctx.lineWidth = 3
+    ctx.roundRect(8, 10, 304, 76, 10)
+    ctx.stroke()
+    ctx.fillStyle = color
+    ctx.font = 'bold 24px Inter, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(`${alert.type} · ${alert.location}`, 160, 36)
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '18px Inter, sans-serif'
+    ctx.fillText(alert.detail || alert.agent || 'ACTIVE ALERT', 160, 64)
+
+    const tex = new THREE.CanvasTexture(canvas)
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.95, depthWrite: false }))
+    sprite.scale.set(150, 45, 1)
+    return sprite
+  }
+
+  private updateAlertMarkers(alerts: AlertData[]) {
+    this.alertMarkers.forEach((marker) => this.world.remove(marker))
+    this.alertMarkers = []
+
+    alerts.forEach((alert) => {
+      const building = this.buildingForAlert(alert)
+      if (!building) return
+      const isChange = alert.type === 'CHANGE'
+      const color = isChange ? 0xffcc00 : 0xff3366
+      const cx = building.x + building.w / 2
+      const cz = building.y + building.h / 2
+      const group = new THREE.Group()
+
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(70, 92, 48),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false })
+      )
+      ring.rotation.x = -Math.PI / 2
+      ring.position.y = 8
+      group.add(ring)
+
+      const beacon = new THREE.Mesh(
+        new THREE.CylinderGeometry(8, 22, 210, 12),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18, depthWrite: false })
+      )
+      beacon.position.y = 105
+      group.add(beacon)
+
+      const icon = new THREE.Mesh(
+        isChange ? new THREE.OctahedronGeometry(34, 0) : new THREE.TetrahedronGeometry(42, 0),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.92, depthWrite: false })
+      )
+      icon.position.y = 235
+      group.add(icon)
+
+      const label = this.makeAlertSprite(alert)
+      label.position.y = 310
+      group.add(label)
+
+      group.position.set(cx, 0, cz)
+      group.renderOrder = 8
+      this.world.add(group)
+      this.alertMarkers.push(group)
+    })
   }
 
   private async loadGltf(url: string): Promise<THREE.Group> {
@@ -776,8 +974,7 @@ export class TacticalMap3D {
   }
 
   private async ensureAgents(agents: AgentData[]) {
-    // render only the first 2 agents to reduce clutter / lag
-    const toRender = agents.slice(0, 2)
+    const toRender = agents
     for (let i = 0; i < toRender.length; i++) {
       const a = toRender[i]
       if (!this.agentViews[a.id]) {
@@ -817,6 +1014,7 @@ export class TacticalMap3D {
       this.state = data
       await this.ensureAgents(data.agents)
       this.updateTargets(data.agents)
+      this.updateAlertMarkers(data.alerts)
     } catch (e) {
       console.error('poll failed', e)
     }
@@ -907,6 +1105,15 @@ export class TacticalMap3D {
         ;(view.beacon.material as THREE.MeshBasicMaterial).opacity = isThreat ? 0.15 + pulse * 0.15 : 0.1
 
         this.updateTrail(view)
+      })
+
+      this.alertMarkers.forEach((marker, idx) => {
+        const pulse = 1 + Math.sin(this.clock.elapsedTime * 4 + idx) * 0.08
+        marker.scale.setScalar(pulse)
+        marker.children.forEach((child) => {
+          if (child instanceof THREE.Sprite) return
+          child.rotation.y += 0.01
+        })
       })
 
       this.controls.update()
