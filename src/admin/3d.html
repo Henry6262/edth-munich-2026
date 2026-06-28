@@ -130,7 +130,8 @@
       const ctx = canvas.getContext('2d');
       // Base
       ctx.fillStyle = '#1a2035';
-      ctx.fillRect(0, 0, size, size);\n      // Noise
+      ctx.fillRect(0, 0, size, size);
+      // Noise
       for (let i = 0; i < 4000; i++) {
         ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.03})`;
         ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
@@ -339,8 +340,19 @@
       sprite.scale.set(50, 12, 1);
       group.add(sprite);
 
+      group.scale.set(1.8, 1.8, 1.8);
       scene.add(group);
       agentMeshes[a.id] = group;
+
+      // Outer glowing selection ring
+      const glowRing = new THREE.Mesh(
+        new THREE.RingGeometry(7, 9, 32),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.25, side: THREE.DoubleSide })
+      );
+      glowRing.rotation.x = -Math.PI / 2;
+      glowRing.position.y = 0.15;
+      glowRing.name = 'glowRing';
+      group.add(glowRing);
 
       // Vision wedge: flat projected cone on ground + faint vertical fan
       const fovLen = 110, fovHalfAngle = Math.PI / 6; // 60° total
@@ -372,15 +384,26 @@
 
       fovMeshes[a.id] = { fov, line };
 
-      // Trail line (recent path)
-      const trailGeo = new THREE.BufferGeometry();
-      const trailPos = new Float32Array(30 * 3);
-      trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
-      const trailMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.4 });
-      const trail = new THREE.Line(trailGeo, trailMat);
-      trail.frustumCulled = false;
-      scene.add(trail);
-      agentTrails[a.id] = { mesh: trail, positions: [] };
+      // Trail lines: outer glow + inner bright core
+      const trailGroup = new THREE.Group();
+      const glowGeo = new THREE.BufferGeometry();
+      const glowPos = new Float32Array(30 * 3);
+      glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPos, 3));
+      const glowMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.25, linewidth: 4 });
+      const glowTrail = new THREE.Line(glowGeo, glowMat);
+      glowTrail.frustumCulled = false;
+      trailGroup.add(glowTrail);
+
+      const coreGeo = new THREE.BufferGeometry();
+      const corePos = new Float32Array(30 * 3);
+      coreGeo.setAttribute('position', new THREE.BufferAttribute(corePos, 3));
+      const coreMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, linewidth: 2 });
+      const coreTrail = new THREE.Line(coreGeo, coreMat);
+      coreTrail.frustumCulled = false;
+      trailGroup.add(coreTrail);
+
+      scene.add(trailGroup);
+      agentTrails[a.id] = { group: trailGroup, positions: [] };
     }
 
     function updateAgent(a, time) {
@@ -390,11 +413,19 @@
       group.position.set(x, 0, z);
       group.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
 
-      // Pulse ring
+      // Pulse inner ring
       const ring = group.getObjectByName('ring');
       if (ring) {
         const s = 1 + Math.sin(time * 4 + a.id) * 0.15;
         ring.scale.setScalar(s);
+      }
+
+      // Pulse outer glow ring
+      const glowRing = group.getObjectByName('glowRing');
+      if (glowRing) {
+        const gs = 1 + Math.sin(time * 2 + a.id) * 0.1;
+        glowRing.scale.setScalar(gs);
+        glowRing.material.opacity = 0.2 + Math.sin(time * 3 + a.id) * 0.1;
       }
 
       const fm = fovMeshes[a.id];
@@ -405,16 +436,18 @@
 
       // Update trail
       const trail = agentTrails[a.id];
-      trail.positions.push(new THREE.Vector3(x, 1, z));
+      trail.positions.push(new THREE.Vector3(x, 1.2, z));
       if (trail.positions.length > 30) trail.positions.shift();
-      const arr = trail.mesh.geometry.attributes.position.array;
-      for (let i = 0; i < 30; i++) {
-        const p = trail.positions[i] || trail.positions[trail.positions.length - 1];
-        arr[i * 3] = p.x;
-        arr[i * 3 + 1] = p.y;
-        arr[i * 3 + 2] = p.z;
-      }
-      trail.mesh.geometry.attributes.position.needsUpdate = true;
+      trail.group.children.forEach(child => {
+        const arr = child.geometry.attributes.position.array;
+        for (let i = 0; i < 30; i++) {
+          const p = trail.positions[i] || trail.positions[trail.positions.length - 1];
+          arr[i * 3] = p.x;
+          arr[i * 3 + 1] = p.y;
+          arr[i * 3 + 2] = p.z;
+        }
+        child.geometry.attributes.position.needsUpdate = true;
+      });
 
       if (a.status === 'THREAT') {
         const alertRing = new THREE.Mesh(
@@ -431,7 +464,7 @@
     function addCoveragePoint(x, y) {
       coveragePoints.push({ x, y });
       if (coveragePoints.length > 300) coveragePoints.shift();
-      const geo = new THREE.CircleGeometry(32, 24);
+      const geo = new THREE.CircleGeometry(22, 20);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00FF88, transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.rotation.x = -Math.PI / 2;
