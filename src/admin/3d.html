@@ -267,6 +267,7 @@
     const agentMeshes = {};
     const fovMeshes = {};
     const agentTrails = {};
+    const agentTargets = {};
     const alertMarkers = [];
     const coverageGroup = new THREE.Group();
     scene.add(coverageGroup);
@@ -406,12 +407,43 @@
       agentTrails[a.id] = { group: trailGroup, positions: [] };
     }
 
+    function setAgentTarget(a) {
+      const now = performance.now();
+      const prev = agentTargets[a.id];
+      agentTargets[a.id] = {
+        x: a.position.x,
+        z: a.position.y,
+        angle: -THREE.MathUtils.degToRad(a.angle),
+        status: a.status,
+        startTime: now,
+        endTime: now + 450, // slightly less than poll interval for responsiveness
+        fromX: prev ? prev.x : a.position.x,
+        fromZ: prev ? prev.z : a.position.y,
+        fromAngle: prev ? prev.angle : -THREE.MathUtils.degToRad(a.angle)
+      };
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    function lerpAngle(a, b, t) {
+      let d = b - a;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return a + d * t;
+    }
+
     function updateAgent(a, time) {
-      const pos = a.position;
-      const x = pos.x, z = pos.y;
+      const t = agentTargets[a.id];
+      if (!t) return;
+      const now = performance.now();
+      const p = Math.min(1, Math.max(0, (now - t.startTime) / (t.endTime - t.startTime)));
+
+      const x = lerp(t.fromX, t.x, p);
+      const z = lerp(t.fromZ, t.z, p);
+      const angle = lerpAngle(t.fromAngle, t.angle, p);
+
       const group = agentMeshes[a.id];
       group.position.set(x, 0, z);
-      group.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+      group.rotation.y = angle;
 
       // Pulse inner ring
       const ring = group.getObjectByName('ring');
@@ -430,9 +462,9 @@
 
       const fm = fovMeshes[a.id];
       fm.fov.position.set(x, 1.5, z);
-      fm.fov.rotation.z = -THREE.MathUtils.degToRad(pos.angle);
+      fm.fov.rotation.z = angle;
       fm.line.position.set(x, 1.5, z);
-      fm.line.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
+      fm.line.rotation.y = angle;
 
       // Update trail
       const trail = agentTrails[a.id];
@@ -441,15 +473,15 @@
       trail.group.children.forEach(child => {
         const arr = child.geometry.attributes.position.array;
         for (let i = 0; i < 30; i++) {
-          const p = trail.positions[i] || trail.positions[trail.positions.length - 1];
-          arr[i * 3] = p.x;
-          arr[i * 3 + 1] = p.y;
-          arr[i * 3 + 2] = p.z;
+          const pos = trail.positions[i] || trail.positions[trail.positions.length - 1];
+          arr[i * 3] = pos.x;
+          arr[i * 3 + 1] = pos.y;
+          arr[i * 3 + 2] = pos.z;
         }
         child.geometry.attributes.position.needsUpdate = true;
       });
 
-      if (a.status === 'THREAT') {
+      if (t.status === 'THREAT') {
         const alertRing = new THREE.Mesh(
           new THREE.RingGeometry(10, 12, 32),
           new THREE.MeshBasicMaterial({ color: 0xFF3366, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
@@ -619,7 +651,7 @@
 
         s.agents.forEach(a => {
           if (!agentMeshes[a.id]) createAgent(a);
-          updateAgent(a, simTime);
+          setAgentTarget(a);
           addCoveragePoint(a.position.x, a.position.y);
         });
 
@@ -645,6 +677,9 @@
     function animate() {
       requestAnimationFrame(animate);
       simTime += 0.016;
+      if (state) {
+        state.agents.forEach(a => updateAgent(a, simTime));
+      }
       controls.update();
       renderer.render(scene, camera);
     }
