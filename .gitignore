@@ -7,7 +7,7 @@ venv/
 
 # Evaluation outputs
 results/
-*.json
+results/**/*.json
 
 # IDE
 .vscode/
@@ -23,10 +23,8 @@ Thumbs.db
 .streamlit/
 
 # Robot / camera test artifacts
-*.jpg
-*.jpeg
-*.png
-*.mp4
+captures/
+recordings/
 
 # External challenge repos (cloned separately)
 challenge/graph_explo/
@@ -40,3 +38,7 @@ static/village.ply
 # Environment
 .env
 .env.local
+
+# Frontend generated dependencies/build output
+frontend/node_modules/
+frontend/dist/

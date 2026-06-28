@@ -26,6 +26,7 @@ Live demo: **SCOUT C2**, a tactical command system where 5 autonomous agents (4 
 - Robot: `picrawler` SunFounder library + `picamera2` + OpenCV
 - Telemetry & video server: Python `Flask` (runs on laptop)
 - Admin dashboard: static web app (HTML/CSS/JS), served by Flask
+- 3D tactical view: React + Vite + TypeScript + Three.js, built into `frontend/dist/` and served by Flask
 - Field operator app: mobile web app, single HTML file, no build step
 - Change detection: OpenCV (`side-quests/01-se3-change-detection/`)
 
@@ -44,11 +45,13 @@ Live demo: **SCOUT C2**, a tactical command system where 5 autonomous agents (4 
 | `src/robot/camera.py` | Pi AI Camera + standard cam wrappers. |
 | `src/robot/demo_loop.py` | Physical robot state machine (patrol → detect → track → report). |
 | `src/admin/index.html` | Admin dashboard frontend. |
-| `src/admin/3d.html` | Three.js 3D tactical view. |
+| `frontend/` | React + Vite 3D tactical view source. Build → `frontend/dist/`. |
+| `frontend/src/components/TacticalMap3D.ts` | Three.js scene: village, agents, FOV, trails, coverage. |
 | `src/video/generate_village.py` | Procedural village point cloud generator. |
 | `static/village.ply` | Generated village point cloud (served by Flask). |
 | `src/operator/index.html` | Field operator mobile frontend. |
 | `docs/IMPLEMENTATION_PLAN.md` | This weekend's build plan. |
+| `docs/3D_ASSET_SCALE_CATALOG.md` | `/3d` asset categories and target scale rules. |
 | `docs/PITCH.md` | Pitch script. |
 | `docs/DEMO_SCRIPT.md` | Demo flow. |
 
@@ -73,6 +76,13 @@ python src/c2/simulator.py
 
 # Render 3-minute demo video
 python src/c2/video_renderer.py
+
+# 3D tactical view — dev
+npm --prefix frontend install
+npm --prefix frontend run dev     # http://localhost:5173
+
+# 3D tactical view — production build (Flask serves it)
+npm --prefix frontend run build
 
 # Telemetry server (laptop) — runs on http://0.0.0.0:5050
 python src/c2/server.py
@@ -100,7 +110,7 @@ python src/robot/demo_loop.py
 ## Design decisions
 
 - **2D tactical map** for the main admin dashboard and demo video — readable and cinematic.
-- **3D tactical view** (`/3d`) using a procedural village point cloud for the "wow" factor and pitch video B-roll.
+- **3D tactical view** (`/3d`) built in React + Three.js, reusing KayKit city/nature assets and Meshy character rigs from Trench Royale; navigable `4200x3200` combat zone with roads, spaced village districts, WASD/arrow camera movement, category-based asset scaling, cinematic FOV cones, trails, and coverage overlay.
 - **Pre-recorded 3-minute cinematic video** for the main pitch; live robot + apps provide the "this is real" moments.
 - **5 agents**: Agent 1 = PiCrawler (real); Agents 2-5 = simulated on the map.
 - **Mobile operator app is a web page**, not React Native. One HTML file, opens in any browser.
@@ -126,4 +136,4 @@ python src/robot/demo_loop.py
 
 ## Last updated
 
-2026-06-27
+2026-06-28

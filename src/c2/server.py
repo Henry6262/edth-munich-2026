@@ -25,12 +25,14 @@ from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, "../../frontend/dist"))
+FRONTEND_ASSETS = os.path.join(FRONTEND_DIST, "assets")
 app = Flask(__name__, static_folder=None)
 
-MAP_W, MAP_H = 1000, 800
-FOV_R = 90
+MAP_W, MAP_H = 4200, 3200
+FOV_R = 170
 FOV_DEG = 90
-STEP_SIZE = 5.0
+STEP_SIZE = 10.0
 
 AGENT_COLORS = {
     "A-1": "#00FF88",
@@ -41,22 +43,26 @@ AGENT_COLORS = {
 }
 
 BUILDINGS = [
-    {"id": "B1", "x": 80, "y": 80, "w": 90, "h": 70},
-    {"id": "B2", "x": 280, "y": 120, "w": 110, "h": 80},
-    {"id": "B3", "x": 480, "y": 70, "w": 100, "h": 90},
-    {"id": "B4", "x": 180, "y": 320, "w": 130, "h": 100},
-    {"id": "B5", "x": 440, "y": 280, "w": 90, "h": 110},
-    {"id": "B6", "x": 680, "y": 180, "w": 120, "h": 90},
-    {"id": "B7", "x": 130, "y": 520, "w": 110, "h": 80},
-    {"id": "B8", "x": 390, "y": 470, "w": 140, "h": 100},
-    {"id": "B9", "x": 640, "y": 440, "w": 100, "h": 120},
-    {"id": "B10", "x": 790, "y": 590, "w": 110, "h": 90},
+    # central village cluster
+    {"id": "B1", "x": 1620, "y": 1280, "w": 280, "h": 220},
+    {"id": "B2", "x": 2050, "y": 1320, "w": 300, "h": 240},
+    {"id": "B3", "x": 1840, "y": 1660, "w": 320, "h": 230},
+    {"id": "B4", "x": 1420, "y": 1580, "w": 270, "h": 220},
+    # north industrial yard
+    {"id": "B5", "x": 1820, "y": 420, "w": 560, "h": 380},
+    # east market / checkpoint
+    {"id": "B6", "x": 3150, "y": 1260, "w": 430, "h": 320},
+    # west church / observation tower
+    {"id": "B7", "x": 520, "y": 1260, "w": 320, "h": 340},
+    # south logistics outpost
+    {"id": "B8", "x": 1950, "y": 2520, "w": 460, "h": 320},
 ]
 
 ROADS = [
-    [(50, 400), (950, 400)],
-    [(500, 50), (500, 750)],
-    [(150, 200), (850, 600)],
+    [(280, 1560), (3920, 1560)],
+    [(2100, 260), (2100, 2980)],
+    [(620, 2700), (1600, 1940), (2760, 1220), (3650, 900)],
+    [(880, 520), (1400, 1240), (1500, 2220)],
 ]
 
 
@@ -128,7 +134,7 @@ class Simulator:
     def _init_agents(self) -> None:
         names = ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO"]
         types = ["GROUND", "DRONE", "GROUND", "DRONE", "GROUND"]
-        drop = (500, 750)
+        drop = (1200, 100)
         for i, (aid, name, atype) in enumerate(zip(AGENT_COLORS, names, types)):
             # Patrol route: drop -> buildings (outside corners) -> back
             route = [drop]
@@ -161,20 +167,26 @@ class Simulator:
         """A* route from p1 to p2 avoiding building footprints."""
         # Fast path: no obstacles in the way.
         line = LineString([p1, p2])
-        obstacles = self._building_polygons(margin=16.0)
+        obstacles = getattr(self, "_obstacles", None)
+        if obstacles is None:
+            obstacles = self._building_polygons(margin=16.0)
+            self._obstacles = obstacles
         if not any(line.intersects(o) for o in obstacles):
             return [p1, p2]
 
-        # Grid-based A*.
-        cell = 20.0
+        # Grid-based A* with a coarse cell for speed on the bigger map.
+        cell = 50.0
         cols, rows = int(math.ceil(MAP_W / cell)), int(math.ceil(MAP_H / cell))
-        obstacle_cells = set()
-        for gx in range(cols):
-            for gy in range(rows):
-                cx, cy = gx * cell + cell / 2, gy * cell + cell / 2
-                pt = (cx, cy)
-                if any(o.contains(Point(pt)) for o in obstacles):
-                    obstacle_cells.add((gx, gy))
+        obstacle_cells = getattr(self, "_obstacle_cells", None)
+        if obstacle_cells is None:
+            obstacle_cells = set()
+            for gx in range(cols):
+                for gy in range(rows):
+                    cx, cy = gx * cell + cell / 2, gy * cell + cell / 2
+                    pt = (cx, cy)
+                    if any(o.contains(Point(pt)) for o in obstacles):
+                        obstacle_cells.add((gx, gy))
+            self._obstacle_cells = obstacle_cells
 
         def to_grid(p):
             return (int(p[0] // cell), int(p[1] // cell))
@@ -183,6 +195,8 @@ class Simulator:
             return (g[0] * cell + cell / 2, g[1] * cell + cell / 2)
 
         start, goal = to_grid(p1), to_grid(p2)
+        start = (max(0, min(cols - 1, start[0])), max(0, min(rows - 1, start[1])))
+        goal = (max(0, min(cols - 1, goal[0])), max(0, min(rows - 1, goal[1])))
         if start in obstacle_cells:
             obstacle_cells.remove(start)
         if goal in obstacle_cells:
@@ -414,7 +428,17 @@ def operator():
 
 @app.route("/3d")
 def view_3d():
-    return send_from_directory(os.path.abspath(os.path.join(BASE_DIR, "../admin")), "3d.html")
+    return send_from_directory(FRONTEND_DIST, "index.html")
+
+
+@app.route("/assets/<path:filename>")
+def frontend_assets(filename):
+    return send_from_directory(FRONTEND_ASSETS, filename)
+
+
+@app.route("/draco/<path:filename>")
+def draco_assets(filename):
+    return send_from_directory(os.path.join(FRONTEND_DIST, "draco"), filename)
 
 
 @app.route("/point_cloud.ply")
