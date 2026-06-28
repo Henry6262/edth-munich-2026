@@ -41,10 +41,10 @@ ROADS = [
 
 # Palette (RGB 0-255)
 COLORS = {
-    "ground": np.array([45, 50, 40]),
-    "ground_dark": np.array([38, 43, 34]),
-    "road": np.array([75, 72, 66]),
-    "road_light": np.array([90, 87, 80]),
+    "ground": np.array([55, 62, 48]),
+    "ground_dark": np.array([48, 54, 42]),
+    "road": np.array([85, 82, 74]),
+    "road_light": np.array([100, 97, 88]),
     "building": np.array([95, 100, 110]),
     "building_dark": np.array([75, 80, 90]),
     "roof": np.array([110, 70, 60]),
@@ -159,9 +159,9 @@ def generate_trees(points: List[Tuple[float, float, float, int, int, int]], n_tr
         if inside_building(cx, cz):
             continue
         placed += 1
-        height = random.uniform(8.0, 18.0)
-        radius = random.uniform(3.5, 6.5)
-        n_foliage = random.randint(200, 450)
+        height = random.uniform(14.0, 28.0)
+        radius = random.uniform(6.0, 10.0)
+        n_foliage = random.randint(350, 700)
         # spherical-ish foliage
         u = np.random.uniform(0, 1, n_foliage)
         v = np.random.uniform(0, 1, n_foliage)
@@ -224,12 +224,12 @@ def main() -> None:
     np.random.seed(42)
     points: List[Tuple[float, float, float, int, int, int]] = []
 
-    generate_ground(points, target=12000)
-    generate_roads(points, samples_per_unit=0.9)
+    generate_ground(points, target=18000)
+    generate_roads(points, samples_per_unit=1.2)
     # Buildings are rendered as Three.js mesh geometry in 3d.html,
     # not as point-cloud dots, so we skip them here.
-    generate_trees(points, n_trees=70)
-    generate_rocks(points, n_rocks=30)
+    generate_trees(points, n_trees=120)
+    generate_rocks(points, n_rocks=40)
 
     write_ply(OUT_PATH, points)
     print(f"Wrote {len(points):,} points to {OUT_PATH}")

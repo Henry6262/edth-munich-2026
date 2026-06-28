@@ -29,6 +29,14 @@
     .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; }
     .btn { position: fixed; bottom: 16px; right: 16px; background: var(--cyan); color: #000; border: none; border-radius: 8px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
+    .building-panel { position: fixed; top: 16px; right: 16px; width: 220px; max-height: 70vh; overflow-y: auto; background: rgba(15, 22, 41, 0.92); border: 1px solid #1E2A4A; border-radius: 12px; padding: 14px; }
+    .building-panel h2 { font-size: 13px; color: var(--cyan); margin: 0 0 10px; letter-spacing: 1px; }
+    .bldg-row { padding: 6px 8px; margin: 4px 0; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 0.2s; border-left: 3px solid; }
+    .bldg-row:hover { opacity: 0.8; }
+    .bldg-row.unknown { background: rgba(136,136,136,0.12); border-color: #888; }
+    .bldg-row.in-progress { background: rgba(255,159,10,0.15); border-color: var(--yellow); }
+    .bldg-row.cleared { background: rgba(50,215,75,0.12); border-color: var(--green); }
+    .bldg-row.threat { background: rgba(255,69,58,0.15); border-color: var(--red); }
     #loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--cyan); font-size: 20px; font-weight: 700; }
   </style>
 </head>
@@ -48,6 +56,10 @@
     <div class="legend-item"><span class="dot" style="background:#FFCC00"></span>Change</div>
     <div class="legend-item"><span class="dot" style="background:#00FF88"></span>Coverage</div>
     <div class="legend-item"><span class="dot" style="background:#fff"></span>Agent</div>
+  </div>
+  <div class="building-panel" id="building-panel">
+    <h2>▼ BUILDING STATUS</h2>
+    <div id="building-list"></div>
   </div>
   <button class="btn" onclick="location.href='/admin'">2D ADMIN →</button>
 
@@ -70,8 +82,7 @@
       {id: "B10", x: 790, y: 590, w: 110, h: 90},
     ];
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0A0E1A);
-    scene.fog = new THREE.Fog(0x0A0E1A, 200, 1600);
+    scene.background = new THREE.Color(0x12182e);
 
     const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 3000);
     camera.position.set(500, 700, 900);
@@ -86,13 +97,30 @@
     controls.enableDamping = true;
     controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
-    // --- Lights ---
-    const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+    // --- Lights (brightened for daytime tactical look) ---
+    const ambient = new THREE.AmbientLight(0x8090b0, 0.85);
     scene.add(ambient);
-    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
-    dir.position.set(500, 800, 500);
+
+    const hemi = new THREE.HemisphereLight(0xaaccff, 0x12182e, 0.7);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 1.3);
+    dir.position.set(400, 900, 300);
     dir.castShadow = true;
+    dir.shadow.mapSize.width = 2048;
+    dir.shadow.mapSize.height = 2048;
     scene.add(dir);
+
+    const rim = new THREE.DirectionalLight(0x6699ff, 0.5);
+    rim.position.set(-500, 200, -500);
+    scene.add(rim);
+
+    const fill = new THREE.DirectionalLight(0xffcc88, 0.45);
+    fill.position.set(500, 100, -500);
+    scene.add(fill);
+
+    // Exponential fog for depth
+    scene.fog = new THREE.FogExp2(0x12182e, 0.0008);
 
     // --- Ground / grid ---
     const groundGeo = new THREE.PlaneGeometry(1000, 800);
@@ -108,28 +136,41 @@
     grid.scale.z = 0.8;
     scene.add(grid);
 
-    // --- Mesh buildings (replace point-cloud building dots) ---
+    // --- Mesh buildings (readable transparent boxes + wireframe) ---
     const buildingColors = [0x8a9199, 0x7d858d, 0x9299a1, 0x848c94, 0x7a828a];
+    const buildingMeshes = [];
     function createBuildings() {
       BUILDINGS.forEach((b, i) => {
         const height = getBuildingHeight(i);
         const cx = b.x + b.w / 2;
         const cz = b.y + b.h / 2;
+        const color = buildingColors[i % buildingColors.length];
 
-        // Main block
+        // Transparent volume
         const geo = new THREE.BoxGeometry(b.w, height, b.h);
         const mat = new THREE.MeshStandardMaterial({
-          color: buildingColors[i % buildingColors.length],
-          roughness: 0.85,
-          metalness: 0.1
+          color: color,
+          transparent: true,
+          opacity: 0.28,
+          roughness: 0.9,
+          metalness: 0.1,
+          side: THREE.DoubleSide,
+          depthWrite: false
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(cx, height / 2, cz);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
         scene.add(mesh);
 
-        // Flat roof (slightly overhanging)
+        // Wireframe edges
+        const edges = new THREE.EdgesGeometry(geo);
+        const lineMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.7 });
+        const wire = new THREE.LineSegments(edges, lineMat);
+        wire.position.copy(mesh.position);
+        scene.add(wire);
+
+        // Flat roof (slightly overhanging, solid)
         const roofGeo = new THREE.BoxGeometry(b.w + 4, 1.5, b.h + 4);
         const roofMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.9 });
         const roof = new THREE.Mesh(roofGeo, roofMat);
@@ -149,10 +190,12 @@
         ctx.textAlign = 'center';
         ctx.fillText(b.id, 32, 21);
         const tex = new THREE.CanvasTexture(canvas);
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.8 }));
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85 }));
         sprite.position.set(cx, height + 8, cz);
-        sprite.scale.set(20, 10, 1);
+        sprite.scale.set(24, 12, 1);
         scene.add(sprite);
+
+        buildingMeshes.push({ id: b.id, mesh, wire, roof, baseColor: color, height });
       });
     }
     createBuildings();
@@ -169,21 +212,47 @@
     // --- Helpers ---
     function createAgent(a) {
       const group = new THREE.Group();
+      const color = new THREE.Color(a.color);
+
+      // Robot body (glowing box)
       const body = new THREE.Mesh(
-        new THREE.SphereGeometry(7, 16, 16),
-        new THREE.MeshStandardMaterial({ color: new THREE.Color(a.color), emissive: new THREE.Color(a.color), emissiveIntensity: 0.4 })
+        new THREE.BoxGeometry(6, 4, 8),
+        new THREE.MeshStandardMaterial({ color: color, emissive: color, emissiveIntensity: 0.5 })
       );
+      body.position.y = 3;
       body.castShadow = true;
       group.add(body);
 
+      // 4 legs
+      const legMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+      const legGeo = new THREE.BoxGeometry(1, 3, 1);
+      const legPositions = [[-2.5, 1.5, -3.5], [2.5, 1.5, -3.5], [-2.5, 1.5, 3.5], [2.5, 1.5, 3.5]];
+      legPositions.forEach(pos => {
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(...pos);
+        group.add(leg);
+      });
+
+      // Direction arrow / antenna
       const arrow = new THREE.Mesh(
-        new THREE.ConeGeometry(4, 12, 16),
+        new THREE.ConeGeometry(2.5, 8, 16),
         new THREE.MeshBasicMaterial({ color: 0xffffff })
       );
       arrow.geometry.rotateX(Math.PI / 2);
-      arrow.position.set(0, 0, 14);
+      arrow.position.set(0, 3, 10);
       group.add(arrow);
 
+      // Glowing ring on ground
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(8, 10, 32),
+        new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.2;
+      ring.name = 'ring';
+      group.add(ring);
+
+      // Label
       const canvas = document.createElement('canvas');
       canvas.width = 128; canvas.height = 32;
       const ctx = canvas.getContext('2d');
@@ -191,7 +260,7 @@
       ctx.fillText(a.id + ' ' + a.name, 64, 22);
       const tex = new THREE.CanvasTexture(canvas);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
-      sprite.position.set(0, 20, 0);
+      sprite.position.set(0, 16, 0);
       sprite.scale.set(50, 12, 1);
       group.add(sprite);
 
@@ -202,7 +271,7 @@
       fovGeo.rotateX(-Math.PI / 2);
       fovGeo.translate(0, 0, 45);
       const fovMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(a.color),
+        color: color,
         transparent: true,
         opacity: 0.15,
         side: THREE.DoubleSide,
@@ -213,33 +282,40 @@
       fovMeshes[a.id] = fov;
     }
 
-    function updateAgent(a) {
+    function updateAgent(a, time) {
       const pos = a.position;
       const x = pos.x, z = pos.y;
       const group = agentMeshes[a.id];
-      group.position.set(x, 8, z);
+      group.position.set(x, 0, z);
       group.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
 
+      // Pulse ring
+      const ring = group.getObjectByName('ring');
+      if (ring) {
+        const s = 1 + Math.sin(time * 4 + a.id) * 0.15;
+        ring.scale.setScalar(s);
+      }
+
       const fov = fovMeshes[a.id];
-      fov.position.set(x, 8, z);
+      fov.position.set(x, 12, z);
       fov.rotation.y = -THREE.MathUtils.degToRad(pos.angle);
 
       if (a.status === 'THREAT') {
-        const ring = new THREE.Mesh(
+        const alertRing = new THREE.Mesh(
           new THREE.RingGeometry(10, 12, 32),
           new THREE.MeshBasicMaterial({ color: 0xFF3366, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
         );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.set(x, 0.5, z);
-        scene.add(ring);
-        alertMarkers.push(ring);
+        alertRing.rotation.x = -Math.PI / 2;
+        alertRing.position.set(x, 0.5, z);
+        scene.add(alertRing);
+        alertMarkers.push(alertRing);
       }
     }
 
     function addCoveragePoint(x, y) {
       coveragePoints.push({ x, y });
       if (coveragePoints.length > 300) coveragePoints.shift();
-      const geo = new THREE.CircleGeometry(18, 16);
+      const geo = new THREE.CircleGeometry(32, 24);
       const mat = new THREE.MeshBasicMaterial({ color: 0x00FF88, transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.rotation.x = -Math.PI / 2;
@@ -275,6 +351,80 @@
       });
     }
 
+    // --- Building status panel ---
+    const buildingStates = {};
+    BUILDINGS.forEach(b => buildingStates[b.id] = 'unknown');
+    const stateColors = {
+      unknown: 0x888888,
+      'in-progress': 0xFFCC00,
+      cleared: 0x00FF88,
+      threat: 0xFF3366,
+      change: 0xFFCC00
+    };
+
+    function initBuildingPanel() {
+      const list = document.getElementById('building-list');
+      list.innerHTML = '';
+      BUILDINGS.forEach((b, i) => {
+        const div = document.createElement('div');
+        div.className = 'bldg-row unknown';
+        div.dataset.id = b.id;
+        div.textContent = b.id + ' — Unknown';
+        div.onclick = () => {
+          const states = ['unknown', 'in-progress', 'cleared', 'threat'];
+          const next = states[(states.indexOf(buildingStates[b.id]) + 1) % states.length];
+          setBuildingState(b.id, next);
+        };
+        list.appendChild(div);
+      });
+    }
+
+    function setBuildingState(id, st) {
+      buildingStates[id] = st;
+      const row = document.querySelector(`.bldg-row[data-id="${id}"]`);
+      if (row) {
+        row.className = 'bldg-row ' + st;
+        row.textContent = id + ' — ' + st.replace('-', ' ').toUpperCase();
+      }
+      const bIdx = BUILDINGS.findIndex(bb => bb.id === id);
+      if (bIdx >= 0) {
+        const bm = buildingMeshes[bIdx];
+        const c = stateColors[st];
+        bm.mesh.material.color.setHex(c);
+        bm.wire.material.color.setHex(c);
+      }
+    }
+
+    function updateBuildingStatesFromState() {
+      if (!state) return;
+      // Reset non-alert states to unknown, keep alerts
+      BUILDINGS.forEach(b => {
+        if (buildingStates[b.id] !== 'threat' && buildingStates[b.id] !== 'change') {
+          buildingStates[b.id] = 'unknown';
+        }
+      });
+      // Mark buildings with nearby agents as in-progress
+      state.agents.forEach(a => {
+        const px = a.position.x, py = a.position.y;
+        BUILDINGS.forEach(b => {
+          if (px >= b.x - 30 && px <= b.x + b.w + 30 && py >= b.y - 30 && py <= b.y + b.h + 30) {
+            if (buildingStates[b.id] !== 'threat' && buildingStates[b.id] !== 'change') {
+              buildingStates[b.id] = 'in-progress';
+            }
+          }
+        });
+      });
+      // Alerts
+      state.alerts.forEach(al => {
+        const b = state.buildings.find(bb => al.location.includes(bb.id));
+        if (b) buildingStates[b.id] = al.type === 'THREAT' ? 'threat' : 'change';
+      });
+      // Apply
+      BUILDINGS.forEach(b => setBuildingState(b.id, buildingStates[b.id]));
+    }
+
+    initBuildingPanel();
+
     // --- Load procedural village point cloud ---
     const loader = new THREE.PLYLoader();
     loader.load('/village.ply', function (geometry) {
@@ -289,10 +439,10 @@
       // x = simulator x, y = height, z = simulator y.
       // Map bounds are 1000 x 800, so it fits naturally over the ground plane.
       const material = new THREE.PointsMaterial({
-        size: 4.0,
+        size: 3.5,
         vertexColors: true,
-        opacity: 1.0,
-        transparent: false,
+        opacity: 0.9,
+        transparent: true,
         sizeAttenuation: true
       });
       const points = new THREE.Points(geometry, material);
@@ -311,6 +461,7 @@
     });
 
     // --- Loop ---
+    let simTime = 0;
     async function poll() {
       try {
         const r = await fetch('/api/state');
@@ -319,11 +470,12 @@
 
         s.agents.forEach(a => {
           if (!agentMeshes[a.id]) createAgent(a);
-          updateAgent(a);
+          updateAgent(a, simTime);
           addCoveragePoint(a.position.x, a.position.y);
         });
 
         renderAlerts();
+        updateBuildingStatesFromState();
 
         document.getElementById('time').textContent = s.mission_time;
         document.getElementById('cov').textContent = s.coverage_pct + '%';
@@ -343,6 +495,7 @@
 
     function animate() {
       requestAnimationFrame(animate);
+      simTime += 0.016;
       controls.update();
       renderer.render(scene, camera);
     }
